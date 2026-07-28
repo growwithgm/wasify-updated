@@ -3,7 +3,7 @@ import { getWhatsAppConfig, graphFetch } from '@/lib/whatsapp/graph'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 60
 
 type MetaTemplate = {
   id: string

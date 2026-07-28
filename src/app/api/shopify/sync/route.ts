@@ -5,7 +5,7 @@ import { syncStore } from '@/lib/shopify/sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+export const maxDuration = 60
 
 /** Manual "Sync now" from the Integrations / Catalog screens. */
 export async function POST(request: Request) {

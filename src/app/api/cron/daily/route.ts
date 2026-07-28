@@ -7,7 +7,10 @@ import { recomputeRfm, refreshSegment } from '@/lib/engines/segments'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+// Vercel's Hobby plan caps serverless functions at 60 seconds. Every sweep
+// below is idempotent, so a timeout mid-run is safe — the next call simply
+// picks up where this one stopped.
+export const maxDuration = 60
 
 /**
  * Nightly maintenance: Shopify backfill, RFM scoring, static segment refresh,

@@ -378,3 +378,85 @@ describe('shop domain', () => {
     expect(normalizeShopDomain('')).toBeNull()
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* Config health check                                                 */
+/* ------------------------------------------------------------------ */
+
+describe('health check', () => {
+  async function health(env: Record<string, string | undefined>) {
+    const saved = { ...process.env }
+    // Clear every key the route inspects, then apply the case under test.
+    for (const k of [
+      'NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY',
+      'ENCRYPTION_KEY', 'NEXT_PUBLIC_SITE_URL', 'META_APP_SECRET', 'CRON_SECRET',
+      'AUTOMATION_CRON_SECRET', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET',
+    ]) delete process.env[k]
+    Object.assign(process.env, env)
+
+    const { GET } = await import('@/app/api/health/route')
+    const body = await (await GET()).json()
+
+    process.env = saved
+    return body
+  }
+
+  const FULL = {
+    NEXT_PUBLIC_SUPABASE_URL: 'https://x.supabase.co',
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: 'x',
+    SUPABASE_SERVICE_ROLE_KEY: 'x',
+    ENCRYPTION_KEY: 'a'.repeat(64),
+    NEXT_PUBLIC_SITE_URL: 'https://app.vercel.app',
+    META_APP_SECRET: 'x',
+    CRON_SECRET: 'x',
+    SHOPIFY_CLIENT_ID: 'x',
+    SHOPIFY_CLIENT_SECRET: 'x',
+  }
+
+  it('passes when everything is set', async () => {
+    const r = await health(FULL)
+    expect(r.ok).toBe(true)
+    expect(r.missing.required).toEqual([])
+  })
+
+  it('names each missing required variable and what it breaks', async () => {
+    const r = await health({ ...FULL, META_APP_SECRET: undefined, CRON_SECRET: undefined })
+    expect(r.ok).toBe(false)
+    const keys = r.missing.required.map((m: any) => m.key)
+    expect(keys).toContain('META_APP_SECRET')
+    expect(keys).toContain('CRON_SECRET')
+    expect(r.missing.required.every((m: any) => m.breaks.length > 10)).toBe(true)
+  })
+
+  it('rejects an ENCRYPTION_KEY that is not 64 hex characters', async () => {
+    const short = await health({ ...FULL, ENCRYPTION_KEY: 'too-short-not-hex' })
+    expect(short.configured.ENCRYPTION_KEY).toBe(false)
+    expect(short.missing.required.find((m: any) => m.key === 'ENCRYPTION_KEY').breaks).toMatch(/INVALID/)
+
+    const wrongLength = await health({ ...FULL, ENCRYPTION_KEY: 'ab'.repeat(16) }) // 32 chars
+    expect(wrongLength.configured.ENCRYPTION_KEY).toBe(false)
+  })
+
+  it('accepts AUTOMATION_CRON_SECRET as an alternative to CRON_SECRET', async () => {
+    const r = await health({ ...FULL, CRON_SECRET: undefined, AUTOMATION_CRON_SECRET: 'x' })
+    expect(r.configured.CRON_SECRET).toBe(true)
+    expect(r.ok).toBe(true)
+  })
+
+  it('treats Shopify as optional, so the app is usable without it', async () => {
+    const r = await health({ ...FULL, SHOPIFY_CLIENT_ID: undefined, SHOPIFY_CLIENT_SECRET: undefined })
+    expect(r.ok).toBe(true)
+    expect(r.missing.optional.map((m: any) => m.key)).toContain('SHOPIFY_CLIENT_ID')
+  })
+
+  it('echoes the webhook and cron URLs so they can be copied into Meta and cron-job.org', async () => {
+    const r = await health(FULL)
+    expect(r.webhooks.whatsapp).toBe('https://app.vercel.app/api/whatsapp/webhook')
+    expect(r.cron.tick).toBe('https://app.vercel.app/api/cron/tick')
+  })
+
+  it('never returns a secret value', async () => {
+    const raw = JSON.stringify(await health({ ...FULL, META_APP_SECRET: 'super-secret-value' }))
+    expect(raw).not.toContain('super-secret-value')
+  })
+})

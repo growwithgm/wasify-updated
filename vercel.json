@@ -1,6 +1,22 @@
 {
-  "crons": [
-    { "path": "/api/cron/tick", "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/daily", "schedule": "0 3 * * *" }
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+
+  "_comment_crons": [
+    "Scheduling is handled by an EXTERNAL cron service (cron-job.org), not by",
+    "Vercel, because the Hobby plan only allows one run per day and the first",
+    "cart reminder needs to fire 45 minutes after abandonment.",
+    "",
+    "Set up two jobs there — see the 'Scheduling' section of README.md:",
+    "  every 15 min   GET /api/cron/tick    messaging sweeps",
+    "  daily 03:00    GET /api/cron/daily   sync, RFM, pruning",
+    "",
+    "Both need the header:  Authorization: Bearer <CRON_SECRET>",
+    "",
+    "If you later upgrade to Vercel Pro, you can move them back in-house by",
+    "replacing this block with:",
+    "  \"crons\": [",
+    "    { \"path\": \"/api/cron/tick\",  \"schedule\": \"*/15 * * * *\" },",
+    "    { \"path\": \"/api/cron/daily\", \"schedule\": \"0 3 * * *\" }",
+    "  ]"
   ]
 }
