@@ -870,7 +870,6 @@ describe('Shopify scopes', () => {
     'fulfillments/create': 'read_fulfillments',
     'fulfillments/update': 'read_fulfillments',
     'app/uninstalled': null, // no scope required
-    'shop/redact': null, // GDPR compliance topic, no scope required
   }
 
   it('requests a scope for every webhook topic it registers', async () => {
@@ -904,5 +903,76 @@ describe('Shopify scopes', () => {
     const { SHOPIFY_SCOPES } = await import('@/lib/shopify/admin')
     expect(SHOPIFY_SCOPES).toContain('write_discounts')
     expect(SHOPIFY_SCOPES).toContain('write_orders') // COD tagging
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Webhook registration                                                */
+/* ------------------------------------------------------------------ */
+
+describe('shopify webhook registration', () => {
+  it('never sends a GDPR compliance topic to the Admin API', async () => {
+    // shopify.dev: the three compliance topics are created "via the Partner
+    // Dashboard or by updating the app configuration TOML" — they are not in
+    // the Admin API topic enum. Posting shop/redact to webhooks.json fails
+    // with "Could not find the webhook topic shop/redact", and because the
+    // loop treated that as fatal it reported every other topic unregistered.
+    const { WEBHOOK_TOPICS, COMPLIANCE_TOPICS } = await import('@/lib/shopify/webhooks')
+    for (const topic of COMPLIANCE_TOPICS) {
+      expect(WEBHOOK_TOPICS, `${topic} cannot be registered through the Admin API`).not.toContain(topic)
+    }
+    expect(COMPLIANCE_TOPICS).toContain('shop/redact')
+  })
+
+  it('still handles every compliance topic it asks the dashboard to send', async () => {
+    // The topics move to the Partner Dashboard, but they arrive at the same
+    // endpoint — so dropping them from registration must not drop the handler.
+    const { COMPLIANCE_TOPICS } = await import('@/lib/shopify/webhooks')
+    const route = readFileSync(join(process.cwd(), 'src/app/api/shopify/webhook/route.ts'), 'utf8')
+    for (const topic of COMPLIANCE_TOPICS) {
+      if (topic === 'customers/data_request') continue // read-only request, nothing stored to return
+      expect(route, `no handler for ${topic}`).toContain(`case '${topic}'`)
+    }
+  })
+
+  it('deletes the rows a contact delete would orphan rather than remove', () => {
+    // conversations/messages CASCADE from contacts, but shopify_orders and
+    // shopify_checkouts are ON DELETE SET NULL — and they carry
+    // customer_name/email/phone. Deleting only the contact would leave that
+    // personal data behind under a null contact_id, which is exactly what
+    // customers/redact exists to prevent.
+    const schema = readFileSync(join(process.cwd(), 'supabase/schema.sql'), 'utf8')
+    const route = readFileSync(join(process.cwd(), 'src/app/api/shopify/webhook/route.ts'), 'utf8')
+    const redact = route.slice(route.indexOf("case 'customers/redact'"))
+
+    for (const table of ['shopify_orders', 'shopify_checkouts']) {
+      const ddl = schema.slice(schema.indexOf(`create table if not exists public.${table} (`))
+      const fk = ddl.slice(0, ddl.indexOf('\n);')).match(/contact_id[^,]*references public\.contacts\(id\)([^,]*)/)
+      expect(fk, `${table} has no contact_id FK`).toBeTruthy()
+      if (/set null/i.test(fk![1])) {
+        expect(redact, `${table} is SET NULL, so redaction must delete it explicitly`).toContain(
+          `.from('${table}').delete()`
+        )
+      }
+    }
+  })
+
+  it('reports a partial failure instead of discarding the successes', async () => {
+    const { registerShopifyWebhooks } = await import('@/lib/shopify/webhooks')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init: any) => {
+      const url = String(input)
+      if (!init || init.method !== 'POST') return new Response(JSON.stringify({ webhooks: [] }), { status: 200 })
+      const topic = JSON.parse(init.body).webhook.topic
+      return topic === 'orders/updated'
+        ? new Response(JSON.stringify({ errors: 'nope' }), { status: 422 })
+        : new Response(JSON.stringify({ webhook: { id: 1, topic, address: url } }), { status: 200 })
+    })
+
+    const { results, failed } = await registerShopifyWebhooks('x.myshopify.com', 't', 'https://app.test')
+
+    // It must not throw, and the seven that worked must still be reported.
+    expect(failed.map((f) => f.topic)).toEqual(['orders/updated'])
+    expect(results.filter((r) => r.ok).length).toBe(results.length - 1)
+    fetchSpy.mockRestore()
   })
 })

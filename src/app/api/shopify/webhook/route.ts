@@ -6,6 +6,14 @@ import { configByStoreDomain } from '@/lib/shopify/admin'
 import { startCodConfirmation, upsertOrderFromWebhook, refreshContactRollups } from '@/lib/engines/cod'
 import { upsertCheckoutFromWebhook, ensureCheckoutRecovery } from '@/lib/engines/recovery'
 import { logActivity, notify } from '@/lib/contacts'
+import { COMPLIANCE_TOPICS } from '@/lib/shopify/webhooks'
+import { phonesMatch, sanitizePhone } from '@/lib/phone'
+
+/** Tenant lookup that does not need a working token — GDPR topics only. */
+async function tenantByStoreDomain(db: any, domain: string): Promise<{ user_id: string } | null> {
+  const { data } = await db.from('shopify_config').select('user_id').eq('store_domain', domain).maybeSingle()
+  return data ?? null
+}
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -42,7 +50,14 @@ export async function POST(request: Request) {
   }
 
   const db = createServiceClient()
-  const config = await configByStoreDomain(domain)
+
+  // configByStoreDomain() returns null unless a usable ACCESS TOKEN decrypts,
+  // which is right for every topic that calls back into Shopify. The GDPR
+  // topics are the exception: shop/redact is delivered ~48 hours AFTER the app
+  // is uninstalled, and app/uninstalled has already nulled the token by then.
+  // Resolving those by domain alone is what makes erasure actually happen.
+  const isCompliance = (COMPLIANCE_TOPICS as readonly string[]).includes(topic)
+  const config = isCompliance ? await tenantByStoreDomain(db, domain) : await configByStoreDomain(domain)
 
   // Log every delivery — the Integrations screen renders this table.
   const { data: logRow } = await db
@@ -165,11 +180,78 @@ async function handleTopic(db: any, config: any, topic: string, payload: any) {
       return
     }
 
+    /* -------------------------- GDPR compliance ------------------------ */
+    // Configured in the Partner Dashboard, not registered through the Admin
+    // API — see COMPLIANCE_TOPICS in lib/shopify/webhooks.ts.
+
     case 'shop/redact': {
-      // GDPR: drop the mirrored commerce data for this store.
+      // Drop the mirrored commerce data for this store.
       await db.from('shopify_orders').delete().eq('user_id', userId)
       await db.from('shopify_checkouts').delete().eq('user_id', userId)
       await db.from('shopify_products').delete().eq('user_id', userId)
+      return
+    }
+
+    case 'customers/redact': {
+      // One customer, not the whole store. Resolve which contact they are the
+      // same way everything else does — Shopify id, then exact digits or the
+      // last 8 — so a redaction cannot miss a thread the app itself unified.
+      const shopifyId = payload?.customer?.id != null ? String(payload.customer.id) : null
+      const phone = sanitizePhone(payload?.customer?.phone ?? '')
+      const email = (payload?.customer?.email ?? '').trim().toLowerCase()
+
+      const ids = new Set<string>()
+
+      if (shopifyId) {
+        const { data } = await db
+          .from('contacts')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('shopify_customer_id', shopifyId)
+        for (const c of data ?? []) ids.add(c.id)
+      }
+
+      if (phone) {
+        const { data } = await db
+          .from('contacts')
+          .select('id, phone')
+          .eq('user_id', userId)
+          .ilike('phone', `%${phone.slice(-8)}`)
+        for (const c of data ?? []) if (phonesMatch(c.phone, phone)) ids.add(c.id)
+      }
+
+      if (email) {
+        const { data } = await db.from('contacts').select('id').eq('user_id', userId).ilike('email', email)
+        for (const c of data ?? []) ids.add(c.id)
+      }
+
+      if (!ids.size) return
+      const list = [...ids]
+
+      // shopify_orders/checkouts reference contacts with ON DELETE SET NULL,
+      // so deleting the contact would orphan them rather than remove them.
+      // They carry customer_name/email/phone, so they must go explicitly.
+      await db.from('shopify_orders').delete().eq('user_id', userId).in('contact_id', list)
+      await db.from('shopify_checkouts').delete().eq('user_id', userId).in('contact_id', list)
+
+      // Conversations, messages and the rest cascade from the contact.
+      await db.from('contacts').delete().eq('user_id', userId).in('id', list)
+      return
+    }
+
+    case 'customers/data_request': {
+      // Nothing is returned over this channel — Shopify requires the app to
+      // hand the data to the store owner directly, within 30 days. Surface it
+      // so the merchant knows a request is outstanding; the payload itself is
+      // already stored on the shopify_webhook_events row.
+      await notify(
+        db,
+        userId,
+        'info',
+        `A customer requested their data (${payload?.customer?.email ?? payload?.customer?.id ?? 'unknown'}). ` +
+          'You have 30 days to send it to them.',
+        '/integrations'
+      )
       return
     }
 

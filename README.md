@@ -104,6 +104,12 @@ enforced in code, and most are covered by a test.
     scopes needs merchant re-consent; old tokens keep old scopes until they
     reconnect. The exact list and a per-scope explanation are in
     [SETUP.md Step 4](SETUP.md); a test pins every topic to its scope.
+12. **GDPR topics are dashboard-only.** `customers/data_request`,
+    `customers/redact` and `shop/redact` are not in the Admin API's topic
+    enum — registering one fails, and used to abort the whole registration
+    loop. They are configured in the Partner Dashboard and handled at the same
+    endpoint. `shop/redact` arrives ~48h *after* uninstall, once the token is
+    gone, so those topics resolve the tenant by store domain alone.
 
 ---
 

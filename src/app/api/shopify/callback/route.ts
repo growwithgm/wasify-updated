@@ -134,11 +134,20 @@ async function handle(request: Request, siteUrl: string, fail: (reason: string) 
   if (error) return fail(`Could not save the connection: ${error.message}`)
 
   /* --------------------------- webhooks ------------------------------- */
+  // A partial failure is not a failed connection: the topics that registered
+  // work immediately. Record which ones did not, and name them.
   try {
-    await registerShopifyWebhooks(shop, tokenJson.access_token, siteUrl)
+    const { results, failed } = await registerShopifyWebhooks(shop, tokenJson.access_token, siteUrl)
     await db
       .from('shopify_config')
-      .update({ webhooks_registered: true, webhooks_registered_at: new Date().toISOString() })
+      .update({
+        webhooks_registered: failed.length === 0,
+        webhooks_registered_at: new Date().toISOString(),
+        connection_error: failed.length
+          ? `${results.length - failed.length} of ${results.length} webhooks registered. Failed: ` +
+            failed.map((f) => `${f.topic} (${f.error})`).join(', ')
+          : null,
+      })
       .eq('user_id', userId)
   } catch (e: any) {
     // Connection still counts as successful — the Integrations page shows a retry.

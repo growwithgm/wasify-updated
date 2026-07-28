@@ -174,7 +174,35 @@ scope is one more thing the merchant sees at install time.
 > test in this repo pins every topic to the scope Shopify gates it on, so the
 > two lists cannot drift.
 
-### 4d. After changing scopes
+### 4d. Compliance webhooks — set these in the dashboard, not in code
+
+The three GDPR topics are **not** in the Admin API's topic list. Wasify cannot
+register them for you: posting one is rejected with *"Could not find the
+webhook topic shop/redact"*. Shopify only accepts them from the Partner
+Dashboard.
+
+**Configuration → Compliance webhooks** — put the same URL in all three:
+
+| Field | Value |
+|---|---|
+| Customer data request endpoint | `https://YOUR-APP.vercel.app/api/shopify/webhook` |
+| Customer data erasure endpoint | `https://YOUR-APP.vercel.app/api/shopify/webhook` |
+| Shop data erasure endpoint | `https://YOUR-APP.vercel.app/api/shopify/webhook` |
+
+Wasify already handles all three at that endpoint: an erasure deletes the
+contact and their mirrored orders and carts, a shop erasure drops the whole
+mirror, and a data request raises a notification (Shopify requires you to send
+the data to the customer yourself, within 30 days).
+
+Mandatory only if you publish the app to the App Store. For a store you own,
+the connection works without them — the other eight webhooks register
+automatically.
+
+> `shop/redact` arrives roughly 48 hours **after** the app is uninstalled, when
+> the access token has already been cleared. Wasify resolves the store by
+> domain for these topics specifically, so erasure still runs.
+
+### 4e. After changing scopes
 
 Widening scopes does **not** apply to already-installed stores. Existing tokens
 keep their old scopes until the merchant re-approves, so:
@@ -431,6 +459,9 @@ Both stay off until you enable them, so nothing is sent by accident.
 | Webhook verification fails in Meta | The verify token does not match. Press **Generate** in Wasify again and re-paste. |
 | Shopify OAuth: *"redirect_uri is not whitelisted"* | Read the `redirect_uri=` in the failing URL's address bar — it is exactly what Shopify was asked to accept. If it says `your-app.vercel.app`, `NEXT_PUBLIC_SITE_URL` is still the example value (Step 5). Otherwise **Redirect URLs** in the Partner Dashboard is empty or does not match it character-for-character — including the trailing slash. Both sides must agree. See Step 4b. |
 | Shopify returns to `/api/shopify/callback` and the page shows **HTTP ERROR 500** | The OAuth handshake worked — the failure is storing the result. Almost always `ENCRYPTION_KEY` or `SUPABASE_SERVICE_ROLE_KEY` missing from Vercel. The callback now redirects back to Integrations with the variable named instead of a blank 500; `/api/health` reports the same thing. |
+| *"Could not find the webhook topic shop/redact"* | The three GDPR topics cannot be registered through the Admin API — they are dashboard-only. Wasify no longer tries; set them under **Configuration → Compliance webhooks** instead (Step 4d). |
+| Webhooks say **Not registered** but some clearly work | Fixed: one rejected topic used to abort the whole loop. The card now says how many of the eight registered and names the ones that did not. |
+| Scopes list looks short — no `read_orders` or `read_discounts` | Expected. Shopify collapses an implied read scope into its write counterpart, so `write_orders` covers `read_orders` and `write_discounts` covers `read_discounts`. |
 | Shopify connects, but no orders or carts arrive | A webhook could not be registered because its scope was missing. Check Step 4c — `checkouts/*` needs `read_orders`, `fulfillments/*` needs `read_fulfillments`. Then Release the version and **Reconnect**. |
 | Cart reminders send with no discount code | `write_discounts` was not granted. Release the version, then Integrations → Shopify → Reconnect. |
 | Shopify admin shows the app in a frame and login loops | **Embed app in Shopify admin** is ticked. Untick it — this app is not embedded, and its cookies are blocked inside that iframe. |
