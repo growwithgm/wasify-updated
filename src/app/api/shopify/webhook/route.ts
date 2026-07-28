@@ -19,10 +19,12 @@ export async function POST(request: Request) {
   const topic = request.headers.get('x-shopify-topic') ?? ''
   const domain = request.headers.get('x-shopify-shop-domain') ?? ''
 
+  // Fail closed for the same reason as the WhatsApp webhook: without the
+  // secret we cannot tell a real Shopify delivery from a forged one.
   const secret = process.env.SHOPIFY_CLIENT_SECRET
   if (!secret) {
-    console.error('[shopify-webhook] SHOPIFY_CLIENT_SECRET is not set')
-    return new NextResponse('Not configured', { status: 500 })
+    console.error('[shopify-webhook] SHOPIFY_CLIENT_SECRET is not set — refusing all webhook traffic')
+    return new NextResponse('Webhook signature verification is not configured', { status: 503 })
   }
 
   const expected = hmacBase64(secret, raw)

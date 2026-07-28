@@ -73,15 +73,20 @@ export async function POST(request: Request) {
   const signature = request.headers.get('x-hub-signature-256') ?? ''
   const appSecret = process.env.META_APP_SECRET
 
-  if (appSecret) {
-    const expected = `sha256=${hmacHex(appSecret, raw)}`
-    const ok =
-      signature.length === expected.length &&
-      crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-    if (!ok) return new NextResponse('Invalid signature', { status: 401 })
-  } else {
-    console.warn('[wa-webhook] META_APP_SECRET is not set — signature check skipped')
+  // Fail CLOSED. An unverified webhook lets anyone who knows this URL inject
+  // messages into a tenant's inbox, mark broadcasts read, or trigger COD
+  // confirmations — so a missing secret must refuse traffic, not wave it through.
+  if (!appSecret) {
+    console.error('[wa-webhook] META_APP_SECRET is not set — refusing all webhook traffic')
+    return new NextResponse('Webhook signature verification is not configured', { status: 503 })
   }
+
+  const expected = `sha256=${hmacHex(appSecret, raw)}`
+  const valid =
+    signature.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+
+  if (!valid) return new NextResponse('Invalid signature', { status: 401 })
 
   let payload: any
   try {

@@ -119,6 +119,8 @@ function ruleMatches(rule: any, text: string): boolean {
  * deliberately conservative: a wrong answer is worse than no answer.
  */
 const MIN_SCORE = 0.45
+/** Score awarded when one of the FAQ's curated keywords matches as a whole word. */
+const KEYWORD_SCORE = 0.8
 const STOPWORDS = new Set([
   'que', 'como', 'para', 'con', 'los', 'las', 'del', 'una', 'uno', 'por', 'the', 'and',
   'you', 'your', 'for', 'are', 'can', 'have', 'this', 'what', 'how', 'when', 'does', 'hola',
@@ -137,14 +139,18 @@ export function bestFaq(faqs: any[], question: string): { faq: any; score: numbe
   let winner: { faq: any; score: number } | null = null
 
   for (const faq of faqs) {
-    const candidate = new Set([...tokenize(faq.question), ...(faq.keywords ?? []).flatMap(tokenize)])
-    if (candidate.size === 0) continue
+    // An explicit keyword is a curated signal — the merchant added it precisely
+    // to catch phrasings the question text does not contain, so a whole-word
+    // hit on one counts for far more than an incidental word in common.
+    const keywordHit = (faq.keywords ?? []).some((k: string) => matchesKeyword(question, k))
 
+    const candidate = new Set(tokenize(faq.question))
     let shared = 0
     for (const word of asked) if (candidate.has(word)) shared++
 
     // Normalise by the shorter side so a long FAQ is not penalised.
-    const score = shared / Math.min(asked.size, candidate.size)
+    const overlap = candidate.size ? shared / Math.min(asked.size, candidate.size) : 0
+    const score = keywordHit ? Math.max(KEYWORD_SCORE, overlap) : overlap
 
     if (score >= MIN_SCORE && (!winner || score > winner.score)) {
       winner = { faq, score }
