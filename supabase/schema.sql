@@ -272,6 +272,8 @@ create table if not exists public.conversations (
   status             text not null default 'open',   -- open | pending | closed
   assigned_to        uuid,                            -- -> agents.id
   labels             jsonb not null default '[]'::jsonb,
+  -- set by the Snooze action; the cron tick flips the row back to 'open'
+  snoozed_until      timestamptz,
 
   last_message_text  text,
   last_message_at    timestamptz,
@@ -288,6 +290,8 @@ create index if not exists conversations_user_idx     on public.conversations(us
 create index if not exists conversations_status_idx   on public.conversations(user_id, status);
 create index if not exists conversations_window_idx   on public.conversations(user_id, last_inbound_at desc);
 create index if not exists conversations_assigned_idx on public.conversations(user_id, assigned_to);
+create index if not exists conversations_snoozed_idx  on public.conversations(snoozed_until)
+  where snoozed_until is not null;
 
 create table if not exists public.messages (
   id                    uuid primary key default gen_random_uuid(),
@@ -311,6 +315,9 @@ create table if not exists public.messages (
   message_id            text,                           -- Meta wamid
   reply_to_message_id   uuid references public.messages(id) on delete set null,
   interactive_reply_id  text,                           -- button/list id the customer tapped
+  -- buttons we attached to an outbound interactive message, so the thread can
+  -- re-render them: [{ "id":"yes", "title":"Sí, confirmo" }, …]
+  buttons               jsonb not null default '[]'::jsonb,
   template_name         text,
   template_language     text,
 
