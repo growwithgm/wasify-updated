@@ -558,3 +558,38 @@ describe('cron auth', () => {
     })
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* vercel.json                                                          */
+/* ------------------------------------------------------------------ */
+
+describe('vercel.json', () => {
+  // Vercel validates this file against a strict schema and rejects ANY key it
+  // does not recognise. A comment-style key ("_comment_crons") once slipped in
+  // and every deployment failed schema validation before it could build, which
+  // looked like an environment-variable problem for hours. If the file exists
+  // at all, it must contain only real options.
+  const ALLOWED = new Set([
+    '$schema', 'buildCommand', 'devCommand', 'installCommand', 'ignoreCommand',
+    'outputDirectory', 'framework', 'regions', 'functions', 'routes', 'rewrites',
+    'redirects', 'headers', 'cleanUrls', 'trailingSlash', 'crons', 'images',
+    'public', 'git', 'github',
+  ])
+
+  it('either does not exist, or contains only keys Vercel accepts', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const file = path.resolve(process.cwd(), 'vercel.json')
+
+    if (!fs.existsSync(file)) return // no config at all is valid and is what we ship
+
+    const config = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const unknown = Object.keys(config).filter((k) => !ALLOWED.has(k))
+
+    expect(
+      unknown,
+      `vercel.json has key(s) Vercel will reject: ${unknown.join(', ')}. ` +
+        'JSON has no comments — put explanations in README.md instead.'
+    ).toEqual([])
+  })
+})

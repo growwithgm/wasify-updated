@@ -214,7 +214,8 @@ It reports presence only — it never shows a value.
 
 Vercel Hobby only allows one cron run per day, which is far too coarse: the
 first cart reminder fires 45 minutes after abandonment. So scheduling lives at
-[cron-job.org](https://cron-job.org) instead. `vercel.json` declares no crons.
+[cron-job.org](https://cron-job.org) instead, and this repo ships no
+`vercel.json` — Next.js needs no configuration on Vercel.
 
 Create **two** jobs.
 
@@ -365,6 +366,7 @@ Both stay off until you enable them, so nothing is sent by accident.
 | Env var changed but the app behaves as before | `NEXT_PUBLIC_*` values are baked in at build time. A rebuild is required, not just saving the variable. |
 | Everything looks fine but nothing reaches the app | The URL points at a different project. Check `NEXT_PUBLIC_SITE_URL` and your cron jobs against **Settings → Domains** for *this* project. |
 | Deploy fails: *maxDuration must be between 1 and 60* | Same — pull the latest, all routes are 60s now. |
+| Deploy fails: *`vercel.json` schema validation failed … should NOT have additional property* | Vercel rejects any key it does not recognise, including comment-style keys like `_note`. JSON has no comments. This repo ships **no `vercel.json`** at all — Next.js needs none. Delete the file or strip the offending key. |
 | WhatsApp webhook returns `503` | `META_APP_SECRET` is not set. This is deliberate: an unverified webhook would let anyone who knows the URL inject messages into your inbox. |
 | Webhook verification fails in Meta | The verify token does not match. Press **Generate** in Wasify again and re-paste. |
 | Shopify OAuth: *"redirect_uri is not whitelisted"* | The Allowed redirection URL in the Partner Dashboard does not match `NEXT_PUBLIC_SITE_URL` + `/api/shopify/callback` exactly. |

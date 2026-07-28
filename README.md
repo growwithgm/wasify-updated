@@ -19,7 +19,8 @@ variables are missing and what each one breaks.
 
 Vercel's Hobby plan allows only one cron run per day, which cannot express a
 45-minute first cart reminder. Scheduling therefore lives in an external
-service — `vercel.json` declares no crons.
+service, and this repo intentionally has **no `vercel.json`** — Next.js needs
+no configuration on Vercel, and an empty config file is one more thing to break.
 
 Set up two jobs at [cron-job.org](https://cron-job.org), both `GET`, each
 carrying your cron secret as a header. Which header depends on which variable
@@ -32,9 +33,22 @@ the exact line to paste.
 | every 15 min | `/api/cron/tick` | COD reminders, cart-recovery sends, automation waits, flow delays, queued broadcasts, snooze wake-ups |
 | daily 03:00 | `/api/cron/daily` | Shopify backfill, RFM scoring, segment refresh, log pruning |
 
-Every sweep is idempotent, so running either more often than needed is
-harmless. On Vercel Pro you can move both back into `vercel.json` — the block
-to paste is in the file's comment.
+Every sweep is idempotent, so running either more often than needed is harmless.
+
+On **Vercel Pro** you can drop the external service and create `vercel.json`:
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/tick",  "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/daily", "schedule": "0 3 * * *" }
+  ]
+}
+```
+
+Vercel validates that file against a strict schema and rejects any key it does
+not recognise — including comment-style keys such as `_note`. Keep it to real
+options only, or the deployment fails before it builds.
 
 ---
 
