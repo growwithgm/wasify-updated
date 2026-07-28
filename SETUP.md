@@ -147,20 +147,44 @@ Import the repo, then **Settings → Environment Variables**. Add all of these t
 | `ENCRYPTION_KEY` | Step 2 — `openssl rand -hex 32` | Yes |
 | `CRON_SECRET` **or** `AUTOMATION_CRON_SECRET` | Step 2 — you invent it (`openssl rand -hex 24`). Set one; each uses a different header. | Yes |
 | `META_APP_SECRET` | Step 3 — Meta App settings → Basic | Yes |
-| `NEXT_PUBLIC_SITE_URL` | Your own Vercel URL, e.g. `https://wasify-one.vercel.app` | Yes |
+| `NEXT_PUBLIC_SITE_URL` | **This** project's Vercel domain — see the warning below | Yes |
 | `SHOPIFY_CLIENT_ID` | Step 4 — Client ID | Only for Shopify |
 | `SHOPIFY_CLIENT_SECRET` | Step 4 — Client secret | Only for Shopify |
 
-**Two traps with `NEXT_PUBLIC_SITE_URL`:**
-- No trailing slash. `https://wasify-one.vercel.app` — not `…app/`
-- Use your **stable production domain**, not a preview URL like
-  `wasify-one-git-branch-you.vercel.app`. It builds the Shopify redirect and
-  the webhook callbacks, so if it drifts, OAuth breaks.
+**Three traps with `NEXT_PUBLIC_SITE_URL`:**
 
-Chicken-and-egg: you do not know the URL until the first deploy. Deploy once,
-copy the domain, add the variable, then **Deployments → ⋯ → Redeploy**.
-`NEXT_PUBLIC_*` variables are baked in at build time, so a redeploy is required
-after changing any of them.
+- **Use *this* project's domain.** Find it in Vercel under **Settings →
+  Domains**, or on the deployment card as *Assigned domains*. If you also had
+  an older Wasify project deployed, its domain is a different app — pointing
+  this variable (or your cron jobs) at the old one means the new app never
+  receives anything while everything still looks like it returns `200 OK`.
+- **No trailing slash.** `https://your-project.vercel.app` — not `…app/`
+- **Use the stable production domain**, not a per-deployment preview URL like
+  `your-project-mcbp5vubg-you.vercel.app`. That changes on every build, and it
+  builds the Shopify redirect and webhook callbacks — if it drifts, OAuth breaks.
+
+Chicken-and-egg: you do not know the domain until the first deploy. Deploy
+once, copy the domain, add the variable, then trigger a new build.
+
+### Making a new build pick up changed variables
+
+`NEXT_PUBLIC_*` values are baked in at build time, so changing them has no
+effect until the app is rebuilt.
+
+Vercel's **Deployments → ⋯ → Redeploy** sometimes refuses with:
+
+> *This deployment can not be redeployed. Please try again from a fresh commit.*
+
+That is expected for older deployments. Just push any new commit to the branch
+Vercel treats as production and it will build automatically with the current
+variables:
+
+```bash
+git commit --allow-empty -m "Rebuild with updated environment variables"
+git push
+```
+
+Then confirm with `https://YOUR-APP.vercel.app/api/health`.
 
 ### Verify
 
@@ -266,8 +290,8 @@ curl -i -H "x-cron-secret: YOUR_SECRET" \
 Your cron-job.org dashboard currently calls:
 
 ```
-https://wasify-one.vercel.app/api/cod/cron          ← old app, does not exist here
-https://wasify-one.vercel.app/api/shopify/cron/sync ← old app, does not exist here
+https://wasify-one.vercel.app/api/cod/cron           ← OLD app + OLD routes
+https://wasify-one.vercel.app/api/shopify/cron/sync  ← OLD app + OLD routes
 ```
 
 This rebuild consolidated those into `/api/cron/tick` and `/api/cron/daily`.
@@ -337,6 +361,9 @@ Both stay off until you enable them, so nothing is sent by accident.
 | Symptom | Cause |
 |---|---|
 | Deploy fails: *"Hobby accounts are limited to daily cron jobs"* | An old `vercel.json` with a `*/15` cron. Pull the latest — this repo declares none. |
+| *"This deployment can not be redeployed. Please try again from a fresh commit."* | Vercel will not rebuild an older deployment. Push any commit (`git commit --allow-empty -m "rebuild"`) — the new build picks up your current environment variables. |
+| Env var changed but the app behaves as before | `NEXT_PUBLIC_*` values are baked in at build time. A rebuild is required, not just saving the variable. |
+| Everything looks fine but nothing reaches the app | The URL points at a different project. Check `NEXT_PUBLIC_SITE_URL` and your cron jobs against **Settings → Domains** for *this* project. |
 | Deploy fails: *maxDuration must be between 1 and 60* | Same — pull the latest, all routes are 60s now. |
 | WhatsApp webhook returns `503` | `META_APP_SECRET` is not set. This is deliberate: an unverified webhook would let anyone who knows the URL inject messages into your inbox. |
 | Webhook verification fails in Meta | The verify token does not match. Press **Generate** in Wasify again and re-paste. |
