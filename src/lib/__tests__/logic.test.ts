@@ -9,6 +9,7 @@ import { bestFaq } from '@/lib/engines/chatbot'
 import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
 import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
+import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 
 /* ------------------------------------------------------------------ */
 /* Phone rules — the dedupe path everything else depends on            */
@@ -424,7 +425,7 @@ describe('health check', () => {
     expect(r.ok).toBe(false)
     const keys = r.missing.required.map((m: any) => m.key)
     expect(keys).toContain('META_APP_SECRET')
-    expect(keys).toContain('CRON_SECRET')
+    expect(keys).toContain('CRON_SECRET or AUTOMATION_CRON_SECRET')
     expect(r.missing.required.every((m: any) => m.breaks.length > 10)).toBe(true)
   })
 
@@ -437,10 +438,21 @@ describe('health check', () => {
     expect(wrongLength.configured.ENCRYPTION_KEY).toBe(false)
   })
 
-  it('accepts AUTOMATION_CRON_SECRET as an alternative to CRON_SECRET', async () => {
+  it('accepts AUTOMATION_CRON_SECRET as an alternative, and says which header to use', async () => {
     const r = await health({ ...FULL, CRON_SECRET: undefined, AUTOMATION_CRON_SECRET: 'x' })
-    expect(r.configured.CRON_SECRET).toBe(true)
     expect(r.ok).toBe(true)
+    expect(r.configured['CRON_SECRET or AUTOMATION_CRON_SECRET']).toBe(true)
+    // The whole point: it must tell you x-cron-secret, not Bearer.
+    expect(r.cron.usingVariable).toBe('AUTOMATION_CRON_SECRET')
+    expect(r.cron.headerName).toBe('x-cron-secret')
+    expect(r.cron.authHeader).not.toContain('Bearer')
+  })
+
+  it('says Bearer when CRON_SECRET is the one that is set', async () => {
+    const r = await health({ ...FULL, AUTOMATION_CRON_SECRET: undefined })
+    expect(r.cron.usingVariable).toBe('CRON_SECRET')
+    expect(r.cron.headerName).toBe('Authorization')
+    expect(r.cron.authHeader).toContain('Bearer')
   })
 
   it('treats Shopify as optional, so the app is usable without it', async () => {
@@ -458,5 +470,91 @@ describe('health check', () => {
   it('never returns a secret value', async () => {
     const raw = JSON.stringify(await health({ ...FULL, META_APP_SECRET: 'super-secret-value' }))
     expect(raw).not.toContain('super-secret-value')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Cron auth — CRON_SECRET and AUTOMATION_CRON_SECRET use DIFFERENT    */
+/* headers, and mixing them is the usual cause of a silent 401.        */
+/* ------------------------------------------------------------------ */
+
+describe('cron auth', () => {
+  const req = (headers: Record<string, string>) => new Request('https://x/api/cron/tick', { headers })
+
+  function withEnv(env: Record<string, string | undefined>, run: () => void) {
+    const saved = { ...process.env }
+    delete process.env.CRON_SECRET
+    delete process.env.AUTOMATION_CRON_SECRET
+    Object.assign(process.env, env)
+    try {
+      run()
+    } finally {
+      process.env = saved
+    }
+  }
+
+  it('accepts Bearer when CRON_SECRET is set', () => {
+    withEnv({ CRON_SECRET: 's3cret' }, () => {
+      expect(isAuthorizedCron(req({ authorization: 'Bearer s3cret' }))).toBe(true)
+      expect(isAuthorizedCron(req({ authorization: 'Bearer wrong' }))).toBe(false)
+      expect(isAuthorizedCron(req({ authorization: 's3cret' }))).toBe(false) // missing "Bearer "
+    })
+  })
+
+  it('accepts x-cron-secret when AUTOMATION_CRON_SECRET is set', () => {
+    withEnv({ AUTOMATION_CRON_SECRET: 's3cret' }, () => {
+      expect(isAuthorizedCron(req({ 'x-cron-secret': 's3cret' }))).toBe(true)
+      expect(isAuthorizedCron(req({ 'x-cron-secret': 'wrong' }))).toBe(false)
+    })
+  })
+
+  it('does NOT accept Bearer when only AUTOMATION_CRON_SECRET is set', () => {
+    // This is the exact trap: the value is right but the header is wrong.
+    withEnv({ AUTOMATION_CRON_SECRET: 's3cret' }, () => {
+      expect(isAuthorizedCron(req({ authorization: 'Bearer s3cret' }))).toBe(false)
+    })
+  })
+
+  it('does NOT accept x-cron-secret when only CRON_SECRET is set', () => {
+    withEnv({ CRON_SECRET: 's3cret' }, () => {
+      expect(isAuthorizedCron(req({ 'x-cron-secret': 's3cret' }))).toBe(false)
+    })
+  })
+
+  it('accepts either header when both variables are set', () => {
+    withEnv({ CRON_SECRET: 'a', AUTOMATION_CRON_SECRET: 'b' }, () => {
+      expect(isAuthorizedCron(req({ authorization: 'Bearer a' }))).toBe(true)
+      expect(isAuthorizedCron(req({ 'x-cron-secret': 'b' }))).toBe(true)
+    })
+  })
+
+  it('refuses everything when neither is configured', () => {
+    withEnv({}, () => {
+      expect(isAuthorizedCron(req({ authorization: 'Bearer anything' }))).toBe(false)
+      expect(isAuthorizedCron(req({ 'x-cron-secret': 'anything' }))).toBe(false)
+      expect(isAuthorizedCron(req({}))).toBe(false)
+    })
+  })
+
+  it('reports the header that matches the configured variable', () => {
+    withEnv({ CRON_SECRET: 'x' }, () => {
+      expect(cronAuthHint().header).toBe('Authorization')
+      expect(cronAuthHint().example).toContain('Bearer')
+    })
+    withEnv({ AUTOMATION_CRON_SECRET: 'x' }, () => {
+      expect(cronAuthHint().header).toBe('x-cron-secret')
+      expect(cronAuthHint().example).toContain('x-cron-secret')
+    })
+    withEnv({}, () => {
+      expect(cronAuthHint().configured).toBe(false)
+    })
+  })
+
+  it('explains the fix in the 401 body without leaking the secret', () => {
+    withEnv({ AUTOMATION_CRON_SECRET: 'super-secret-value' }, () => {
+      const body = cronUnauthorizedBody()
+      expect(body.expectedHeader).toContain('x-cron-secret')
+      expect(JSON.stringify(body)).not.toContain('super-secret-value')
+    })
   })
 })

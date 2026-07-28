@@ -21,8 +21,11 @@ Vercel's Hobby plan allows only one cron run per day, which cannot express a
 45-minute first cart reminder. Scheduling therefore lives in an external
 service — `vercel.json` declares no crons.
 
-Set up two jobs at [cron-job.org](https://cron-job.org), both `GET` with the
-header `Authorization: Bearer <CRON_SECRET>`:
+Set up two jobs at [cron-job.org](https://cron-job.org), both `GET`, each
+carrying your cron secret as a header. Which header depends on which variable
+you set — `CRON_SECRET` uses `Authorization: Bearer <value>`, and
+`AUTOMATION_CRON_SECRET` uses `x-cron-secret: <value>`. `/api/health` prints
+the exact line to paste.
 
 | Schedule | URL | What it does |
 |---|---|---|
@@ -89,7 +92,7 @@ enforced in code, and most are covered by a test.
 npm install
 cp .env.example .env.local     # fill it in
 npm run dev                    # http://localhost:3000
-npm test                       # 51 unit tests
+npm test                       # 60 unit tests
 npm run typecheck
 ```
 
@@ -106,6 +109,8 @@ update checkout_recoveries set created_at = now() - interval '2 hours' where id 
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" https://your-app.vercel.app/api/cron/tick
+# or, if you set AUTOMATION_CRON_SECRET instead:
+curl -H "x-cron-secret: $AUTOMATION_CRON_SECRET" https://your-app.vercel.app/api/cron/tick
 ```
 
 Every sweep is idempotent, so you can run it as often as you like.

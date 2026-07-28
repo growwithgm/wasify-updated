@@ -56,6 +56,11 @@ openssl rand -hex 32     # -> ENCRYPTION_KEY  (must be exactly 64 characters)
 openssl rand -hex 24     # -> CRON_SECRET     (any long random string)
 ```
 
+**These two are not obtained from anywhere.** They are passwords you invent.
+Nothing external issues them — the app simply compares what it receives against
+what you stored. Any long random string works; the commands above just produce
+a good one.
+
 No terminal? Use [generate-random.org/api-key-generator](https://generate-random.org/api-key-generator)
 — for `ENCRYPTION_KEY` you need **64 characters, hex only** (`0-9`, `a-f`).
 
@@ -63,6 +68,32 @@ No terminal? Use [generate-random.org/api-key-generator](https://generate-random
 > saved.** It is the key those tokens are encrypted with — change it and they
 > become unreadable, and you have to reconnect both integrations. Save it in a
 > password manager now.
+
+### `CRON_SECRET` vs `AUTOMATION_CRON_SECRET`
+
+The app accepts either, and they do the same job — but **each pairs with a
+different HTTP header**, and mixing them is the most common reason a scheduler
+gets a silent `401`:
+
+| If you set this variable | Your scheduler must send this header |
+|---|---|
+| `CRON_SECRET` | `Authorization: Bearer <value>` |
+| `AUTOMATION_CRON_SECRET` | `x-cron-secret: <value>` |
+
+Set **one** of them. If you are unsure which you have, open
+`https://YOUR-APP.vercel.app/api/health` — the `cron` block names the variable
+it found and the exact header to paste:
+
+```json
+"cron": {
+  "usingVariable": "AUTOMATION_CRON_SECRET",
+  "headerName": "x-cron-secret",
+  "authHeader": "x-cron-secret: <your AUTOMATION_CRON_SECRET>"
+}
+```
+
+A rejected cron call says the same thing in its response body, so a
+misconfigured job diagnoses itself.
 
 ---
 
@@ -114,7 +145,7 @@ Import the repo, then **Settings → Environment Variables**. Add all of these t
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Step 1d — anon / publishable | Yes |
 | `SUPABASE_SERVICE_ROLE_KEY` | Step 1d — service_role / secret | Yes |
 | `ENCRYPTION_KEY` | Step 2 — `openssl rand -hex 32` | Yes |
-| `CRON_SECRET` | Step 2 — `openssl rand -hex 24` | Yes |
+| `CRON_SECRET` **or** `AUTOMATION_CRON_SECRET` | Step 2 — you invent it (`openssl rand -hex 24`). Set one; each uses a different header. | Yes |
 | `META_APP_SECRET` | Step 3 — Meta App settings → Basic | Yes |
 | `NEXT_PUBLIC_SITE_URL` | Your own Vercel URL, e.g. `https://wasify-one.vercel.app` | Yes |
 | `SHOPIFY_CLIENT_ID` | Step 4 — Client ID | Only for Shopify |
@@ -143,7 +174,9 @@ missing:
   "cron": {
     "tick": "https://your-app.vercel.app/api/cron/tick",
     "daily": "https://your-app.vercel.app/api/cron/daily",
-    "authHeader": "Authorization: Bearer <CRON_SECRET>"
+    "authHeader": "x-cron-secret: <your AUTOMATION_CRON_SECRET>",
+    "headerName": "x-cron-secret",
+    "usingVariable": "AUTOMATION_CRON_SECRET"
   }
 }
 ```
@@ -170,14 +203,19 @@ Create **two** jobs.
 | Schedule | **Every 15 minutes** — in the custom fields, minutes `0,15,30,45`, every hour, every day |
 | Request method | `GET` |
 
-Then open **Advanced** and add a header:
+Then open **Advanced** and add a header. **Which header depends on which
+variable you set in Vercel:**
 
-| Header key | Header value |
-|---|---|
-| `Authorization` | `Bearer YOUR_CRON_SECRET` |
+| If Vercel has… | Header key | Header value |
+|---|---|---|
+| `CRON_SECRET` | `Authorization` | `Bearer YOUR_SECRET` — the word `Bearer`, one space, then the secret |
+| `AUTOMATION_CRON_SECRET` | `x-cron-secret` | `YOUR_SECRET` — the secret on its own, no prefix |
 
-The word `Bearer`, then a single space, then the secret. Without this header
-the endpoint returns `401` and nothing runs.
+Not sure? `https://YOUR-APP.vercel.app/api/health` prints the exact line to use
+under `cron.authHeader`.
+
+Without the right header the endpoint returns `401` and nothing runs — but the
+`401` body names the header it expected, so you are never guessing.
 
 This job drives: COD reminders and no-reply cancellations, cart-recovery
 reminders, automation waits, flow delays, queued broadcasts, snooze wake-ups.
@@ -190,7 +228,7 @@ reminders, automation waits, flow delays, queued broadcasts, snooze wake-ups.
 | URL | `https://YOUR-APP.vercel.app/api/cron/daily` |
 | Schedule | Once a day, `03:00` |
 | Request method | `GET` |
-| Header | `Authorization: Bearer YOUR_CRON_SECRET` (same as above) |
+| Header | the same header you used for Job 1 |
 
 This one does the Shopify backfill, nightly RFM scoring, segment refresh and
 log pruning. It never sends a message.
@@ -207,13 +245,19 @@ A successful run returns `200` with a body like:
 
 All zeros is correct when there is nothing due.
 
-- `401` → the `Authorization` header is missing or the secret does not match
-- `503` → `CRON_SECRET` is not set in Vercel
+- `401` → wrong header for the variable you set, or the value does not match.
+  The response body names the header this deployment expects.
+- `503` → neither `CRON_SECRET` nor `AUTOMATION_CRON_SECRET` is set in Vercel
 
 Or test it yourself:
 
 ```bash
-curl -i -H "Authorization: Bearer YOUR_CRON_SECRET" \
+# if you set CRON_SECRET
+curl -i -H "Authorization: Bearer YOUR_SECRET" \
+  https://YOUR-APP.vercel.app/api/cron/tick
+
+# if you set AUTOMATION_CRON_SECRET
+curl -i -H "x-cron-secret: YOUR_SECRET" \
   https://YOUR-APP.vercel.app/api/cron/tick
 ```
 
@@ -297,7 +341,7 @@ Both stay off until you enable them, so nothing is sent by accident.
 | WhatsApp webhook returns `503` | `META_APP_SECRET` is not set. This is deliberate: an unverified webhook would let anyone who knows the URL inject messages into your inbox. |
 | Webhook verification fails in Meta | The verify token does not match. Press **Generate** in Wasify again and re-paste. |
 | Shopify OAuth: *"redirect_uri is not whitelisted"* | The Allowed redirection URL in the Partner Dashboard does not match `NEXT_PUBLIC_SITE_URL` + `/api/shopify/callback` exactly. |
-| Cron returns `401` | Header missing or malformed. It must be `Authorization: Bearer <secret>` — with the space. |
+| Cron returns `401` | Usually the wrong header for the variable you set: `CRON_SECRET` needs `Authorization: Bearer <secret>`, `AUTOMATION_CRON_SECRET` needs `x-cron-secret: <secret>`. The `401` body names the right one. |
 | Cart reminders never send | Recovery not enabled, no template set for that stage, or the cron job still points at the old app's URL. |
 | Templates will not send | Only **Approved** templates can be sent. Press **Sync from Meta** on the Templates screen. |
 | Login says *"Invalid login credentials"* right after signup | Email confirmation is on — check your inbox, or turn it off in Supabase → Authentication → Providers → Email. |

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cronAuthHint } from '@/lib/cron'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -67,7 +68,9 @@ export async function GET() {
       breaks: 'The WhatsApp webhook refuses all traffic (503) — no inbound messages arrive.',
     },
     {
-      key: 'CRON_SECRET',
+      // Either variable satisfies this — they differ only in which header
+      // the scheduler must send. See cronAuthHint() in lib/cron.ts.
+      key: 'CRON_SECRET or AUTOMATION_CRON_SECRET',
       ok: !!env.CRON_SECRET || !!env.AUTOMATION_CRON_SECRET,
       required: true,
       breaks: 'Cron endpoints reject every request — no reminders, recovery or scheduled sends.',
@@ -115,7 +118,15 @@ export async function GET() {
       cron: {
         tick: `${siteUrl}/api/cron/tick`,
         daily: `${siteUrl}/api/cron/daily`,
-        authHeader: 'Authorization: Bearer <CRON_SECRET>',
+        // Which header to use depends on WHICH secret variable you set —
+        // mixing them is the usual reason a scheduler gets a silent 401.
+        authHeader: cronAuthHint().example,
+        headerName: cronAuthHint().header,
+        usingVariable: env.CRON_SECRET
+          ? 'CRON_SECRET'
+          : env.AUTOMATION_CRON_SECRET
+            ? 'AUTOMATION_CRON_SECRET'
+            : null,
       },
     },
     { status: missingRequired.length === 0 ? 200 : 503 }

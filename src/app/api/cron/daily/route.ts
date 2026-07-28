@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isAuthorizedCron } from '@/lib/cron'
+import { isAuthorizedCron, cronUnauthorizedBody } from '@/lib/cron'
 import { getShopifyConfig } from '@/lib/shopify/admin'
 import { syncStore } from '@/lib/shopify/sync'
 import { recomputeRfm, refreshSegment } from '@/lib/engines/segments'
@@ -19,7 +19,9 @@ export const maxDuration = 60
  */
 export async function GET(request: Request) {
   if (!isAuthorizedCron(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    // The body names the header this deployment expects, so a misconfigured
+    // scheduler diagnoses itself instead of silently never running.
+    return NextResponse.json(cronUnauthorizedBody(), { status: 401 })
   }
 
   const db = createServiceClient()
