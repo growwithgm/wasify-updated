@@ -6,85 +6,32 @@ keyword chatbot — all scoped to one merchant per login.
 
 ---
 
-## Setup in five steps
+## Setup
 
-### 1. Create a Supabase project
+**→ Follow [SETUP.md](SETUP.md).** It walks through Supabase, every environment
+variable and exactly where to find it, Vercel, cron-job.org scheduling, and
+connecting WhatsApp and Shopify — with a troubleshooting table at the end.
 
-New project → **SQL Editor** → paste the whole of [`supabase/schema.sql`](supabase/schema.sql)
-→ **Run**.
+After deploying, `https://your-app.vercel.app/api/health` reports which
+variables are missing and what each one breaks.
 
-It creates 54 tables with Row Level Security on every one of them, plus the
-indexes, triggers and realtime publication the app expects. The file is
-idempotent — re-running it never destroys data, so it is safe to apply again
-after pulling changes.
+### Scheduling
 
-Then in **Authentication → Providers**, make sure **Email** is enabled. If you
-leave "Confirm email" on, new users must click the link before their first
-sign-in.
+Vercel's Hobby plan allows only one cron run per day, which cannot express a
+45-minute first cart reminder. Scheduling therefore lives in an external
+service — `vercel.json` declares no crons.
 
-### 2. Configure environment variables
+Set up two jobs at [cron-job.org](https://cron-job.org), both `GET` with the
+header `Authorization: Bearer <CRON_SECRET>`:
 
-Copy `.env.example` to `.env.local` and fill it in. The two that people miss:
-
-| Variable | Why it matters |
-|---|---|
-| `ENCRYPTION_KEY` | 64 hex chars (`openssl rand -hex 32`). Encrypts every stored WhatsApp and Shopify token. **Never change it after tokens are saved** — they become undecryptable. |
-| `NEXT_PUBLIC_SITE_URL` | Builds the OAuth redirect and webhook callback URLs. Set it explicitly on Vercel; the auto-generated preview URL will break Shopify OAuth. |
-
-`META_APP_SECRET` and `SHOPIFY_CLIENT_SECRET` are **required in production**.
-Both webhooks refuse all traffic (HTTP 503) when their signing secret is
-missing, because an unverified webhook would let anyone who knows the URL
-inject messages into a tenant's inbox.
-
-### 3. Deploy to Vercel
-
-```bash
-vercel --prod
-```
-
-Add the same variables under **Settings → Environment Variables**.
-
-`vercel.json` already declares the two cron jobs:
-
-| Schedule | Route | What it does |
+| Schedule | URL | What it does |
 |---|---|---|
 | every 15 min | `/api/cron/tick` | COD reminders, cart-recovery sends, automation waits, flow delays, queued broadcasts, snooze wake-ups |
-| daily 03:00 UTC | `/api/cron/daily` | Shopify backfill, nightly RFM scoring, static segment refresh, webhook-log pruning |
+| daily 03:00 | `/api/cron/daily` | Shopify backfill, RFM scoring, segment refresh, log pruning |
 
-The 15-minute cadence is deliberate: the first cart reminder fires 45 minutes
-after abandonment, and a daily cron cannot express that. **Vercel Hobby only
-allows daily crons** — on Hobby, `/api/cron/tick` will run once a day and cart
-reminders will be late. Use a Pro plan, or point an external scheduler
-(cron-job.org, GitHub Actions) at the same URL with the `Authorization: Bearer
-$CRON_SECRET` header.
-
-### 4. Connect WhatsApp
-
-**Integrations → WhatsApp Cloud API → Connect.**
-
-1. Paste your **Phone number ID** and **WhatsApp Business Account ID** from
-   Meta → WhatsApp → API Setup.
-2. Paste a **permanent access token**. It is encrypted before storage and is
-   never sent back to the browser — the field shows a masked value.
-3. Press **Generate** next to *Webhook verify token* and copy the value.
-4. In the Meta App Dashboard → WhatsApp → Configuration, set:
-   - Callback URL: `https://your-app.vercel.app/api/whatsapp/webhook`
-   - Verify token: the value you just generated
-   - Subscribe to the **messages** field
-5. Back in Wasify, press **Run diagnostics**. It makes live Graph API calls and
-   tells you exactly which piece is wrong if something is.
-
-### 5. Connect Shopify
-
-**Integrations → Shopify → Connect store**, enter `your-store.myshopify.com`,
-approve the scopes. Webhooks are registered automatically on the way back.
-
-Scopes requested: `read_customers`, `read_orders`, `write_orders` (COD tags),
-`read_checkouts`, `read_fulfillments`, `read_products`, `read_discounts`,
-`write_discounts` (single-use recovery codes).
-
-Widening scopes later always requires the merchant to re-approve — the Catalog
-screen shows a reconnect banner when `write_discounts` is missing.
+Every sweep is idempotent, so running either more often than needed is
+harmless. On Vercel Pro you can move both back into `vercel.json` — the block
+to paste is in the file's comment.
 
 ---
 
@@ -97,7 +44,7 @@ Shopify ► /api/shopify/webhook ─┘   └─► find-or-create contact + con
                                         └─► flow ─► automations ─► chatbot
                                             └─► COD reply ─► opt-out check
 
-Vercel cron ──► /api/cron/tick ──► COD timers, recovery sweep, flow delays,
+cron-job.org ─► /api/cron/tick ──► COD timers, recovery sweep, flow delays,
                                    automation waits, broadcast batches
 ```
 
@@ -142,7 +89,7 @@ enforced in code, and most are covered by a test.
 npm install
 cp .env.example .env.local     # fill it in
 npm run dev                    # http://localhost:3000
-npm test                       # 44 unit tests
+npm test                       # 51 unit tests
 npm run typecheck
 ```
 
