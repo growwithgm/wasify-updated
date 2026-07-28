@@ -454,7 +454,7 @@ function RuleModal({ rule, onClose, onSaved }: { rule: any; onClose: () => void;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
-          keywords: form.keywords.split(',').map((k) => k.trim()).filter(Boolean),
+          keywords: form.keywords.split(',').map((k: string) => k.trim()).filter(Boolean),
         }),
       })
       const json = await res.json()
@@ -549,7 +549,7 @@ function FaqModal({ faq, onClose, onSaved }: { faq: any; onClose: () => void; on
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
-          keywords: form.keywords.split(',').map((k) => k.trim()).filter(Boolean),
+          keywords: form.keywords.split(',').map((k: string) => k.trim()).filter(Boolean),
         }),
       })
       const json = await res.json()
