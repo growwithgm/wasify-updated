@@ -5,12 +5,24 @@ export const metadata: Metadata = {
   title: 'Wasify — WhatsApp CRM for Shopify',
   description:
     'Turn WhatsApp into your sales channel: shared inbox, COD confirmation, cart recovery, broadcasts and flows for Shopify merchants.',
-  icons: { icon: '/favicon.svg' },
+  icons: { icon: '/favicon.svg', apple: '/icon.svg' },
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    title: 'Wasify',
+    // Matches the dark sidebar, so the iOS status bar blends into the shell.
+    statusBarStyle: 'black-translucent',
+  },
 }
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  // Let the layout paint under the notch / home indicator; the .w-safe-*
+  // helpers in globals.css add the insets back where they matter.
+  viewportFit: 'cover',
+  // Stops iOS zooming the whole page when a small input is focused.
+  maximumScale: 1,
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: '#F7F9FB' },
     { media: '(prefers-color-scheme: dark)', color: '#0F172A' },

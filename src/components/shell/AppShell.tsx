@@ -56,6 +56,23 @@ export function AppShell({ ctx, children }: { ctx: ShellContext; children: React
 
   useEffect(() => setMenuOpen(false), [pathname])
 
+  // While the sheet is open: Escape closes it, and the page behind must not
+  // scroll — otherwise a phone scrolls the content under the overlay.
+  useEffect(() => {
+    if (!menuOpen) return
+
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuOpen(false)
+    window.addEventListener('keydown', onKey)
+
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previous
+    }
+  }, [menuOpen])
+
   // Live unread badge + notification bell.
   useEffect(() => {
     const sb = supabaseBrowser()
@@ -90,7 +107,10 @@ export function AppShell({ ctx, children }: { ctx: ShellContext; children: React
   )
 
   return (
-    <div className="flex h-screen w-full overflow-hidden" style={{ background: 'var(--w-canvas)' }}>
+    <div
+      className="w-app-root flex h-screen w-full overflow-hidden"
+      style={{ background: 'var(--w-canvas)' }}
+    >
       <Sidebar expanded={expanded} onToggle={() => setExpanded((v) => !v)} unread={unread} />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -114,43 +134,47 @@ export function AppShell({ ctx, children }: { ctx: ShellContext; children: React
             <div
               onClick={() => setMenuOpen(false)}
               className="fixed inset-x-0 bottom-0 top-14 z-[70]"
-              style={{ background: 'rgba(15,23,42,.4)' }}
+              style={{ background: 'rgba(15,23,42,.45)' }}
             />
             <div
-              className="fixed left-2 right-2 top-14 z-[75] max-h-[calc(100vh-76px)] overflow-y-auto rounded-2xl border p-2"
+              role="dialog"
+              aria-label="Screens"
+              className="w-sheet w-safe-bottom fixed left-2 right-2 top-[60px] z-[75] max-h-[calc(100dvh-76px)] overflow-y-auto rounded-2xl border p-2"
               style={{
                 background: 'var(--w-card)',
                 borderColor: 'var(--w-border)',
-                boxShadow: '0 16px 40px rgba(16,24,40,.25)',
+                boxShadow: '0 16px 40px rgba(16,24,40,.28)',
               }}
             >
               <div
-                className="px-2.5 pt-2 pb-1 text-[10.5px] font-bold uppercase tracking-[.06em]"
+                className="px-2.5 pt-1.5 pb-1 text-[10.5px] font-bold uppercase tracking-[.06em]"
                 style={{ color: 'var(--w-muted)' }}
               >
-                Screens
+                Go to
               </div>
+
               {NAV_ITEMS.map(({ href, label, Icon, badgeKey }) => {
                 const active = pathname.startsWith(href)
-                const badge = badgeKey === 'unread' && unread > 0 ? String(unread) : null
+                const badge = badgeKey === 'unread' && unread > 0 ? (unread > 99 ? '99+' : String(unread)) : null
                 return (
                   <Link
                     key={href}
                     href={href}
-                    className="flex min-h-11 items-center gap-[11px] rounded-[9px] px-3 py-[11px] text-sm no-underline"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex min-h-12 items-center gap-3 rounded-[10px] px-3 py-3 text-[15px] no-underline active:opacity-70"
                     style={{
                       background: active ? 'var(--w-greentint)' : 'transparent',
                       color: active ? '#15803D' : 'var(--w-text)',
                       fontWeight: active ? 700 : 500,
                     }}
                   >
-                    <span className="flex w-5 min-w-5" style={{ color: active ? '#16A34A' : 'var(--w-muted)' }}>
-                      <Icon size={20} />
+                    <span className="flex w-[22px] min-w-[22px]" style={{ color: active ? '#16A34A' : 'var(--w-muted)' }}>
+                      <Icon size={22} />
                     </span>
                     <span className="flex-1">{label}</span>
                     {badge && (
                       <span
-                        className="rounded-full px-2 py-px text-[11px] font-bold text-white"
+                        className="rounded-full px-2 py-0.5 text-[12px] font-bold text-white"
                         style={{ background: '#22C55E' }}
                       >
                         {badge}
@@ -159,11 +183,34 @@ export function AppShell({ ctx, children }: { ctx: ShellContext; children: React
                   </Link>
                 )
               })}
+
+              {/* Theme + sign-out live in the topbar on desktop, but those
+                  buttons are cramped on a phone — surface them here too. */}
+              <div className="mt-1.5 flex gap-2 px-1 pt-2" style={{ borderTop: '1px solid var(--w-border)' }}>
+                <button
+                  onClick={toggleDark}
+                  className="flex-1 cursor-pointer rounded-[10px] border px-3 py-2.5 text-[13.5px] font-medium"
+                  style={{ borderColor: 'var(--w-border)', background: 'transparent', color: 'var(--w-text)' }}
+                >
+                  {dark ? 'Light mode' : 'Dark mode'}
+                </button>
+                <button
+                  onClick={async () => {
+                    await supabaseBrowser().auth.signOut()
+                    window.location.href = '/login'
+                  }}
+                  className="flex-1 cursor-pointer rounded-[10px] border px-3 py-2.5 text-[13.5px] font-medium"
+                  style={{ borderColor: 'var(--w-border)', background: 'transparent', color: '#EF4444' }}
+                >
+                  Sign out
+                </button>
+              </div>
+
               <div
-                className="mt-1.5 px-3 pb-1.5 pt-2.5 text-[11.5px] leading-relaxed"
-                style={{ borderTop: '1px solid var(--w-border)', color: 'var(--w-muted)' }}
+                className="px-3 pb-1 pt-3 text-[11.5px] leading-relaxed"
+                style={{ color: 'var(--w-muted)' }}
               >
-                <span className="flex items-center gap-[7px] font-semibold" style={{ color: '#16A34A' }}>
+                <span className="flex items-center gap-[7px] font-semibold" style={{ color: ctx.whatsappConnected ? '#16A34A' : '#EF4444' }}>
                   <span
                     className="h-[7px] w-[7px] rounded-full"
                     style={{ background: ctx.whatsappConnected ? '#22C55E' : '#EF4444' }}

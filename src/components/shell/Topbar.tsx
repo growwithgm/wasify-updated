@@ -141,7 +141,7 @@ export function Topbar({
 
       <form
         onSubmit={submitSearch}
-        data-r="search"
+        data-r="hide"
         className="flex w-[320px] items-center gap-2 rounded-lg border px-3 py-[7px]"
         style={{ background: 'var(--w-canvas)', borderColor: 'var(--w-border)' }}
       >
@@ -225,8 +225,9 @@ export function Topbar({
 
       <div className="flex-1" />
 
-      {/* dark mode */}
+      {/* dark mode — also offered in the mobile sheet, so desktop only */}
       <button
+        data-r="hide"
         onClick={onToggleDark}
         title={dark ? 'Switch to light' : 'Switch to dark'}
         className="flex h-[34px] w-[34px] cursor-pointer items-center justify-center rounded-lg border bg-transparent"
@@ -280,8 +281,8 @@ export function Topbar({
         )}
       </div>
 
-      {/* avatar */}
-      <div data-popover className="relative">
+      {/* avatar — sign-out is in the mobile sheet, so desktop only */}
+      <div data-r="hide" data-popover className="relative">
         <button
           onClick={() => {
             setAvatarOpen((v) => !v)

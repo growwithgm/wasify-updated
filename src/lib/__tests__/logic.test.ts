@@ -593,3 +593,60 @@ describe('vercel.json', () => {
     ).toEqual([])
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* Responsive layer                                                     */
+/* ------------------------------------------------------------------ */
+
+describe('responsive CSS', () => {
+  // Components opt into responsive behaviour with data-r="…" attributes that
+  // are INERT unless globals.css has a matching rule. They were used in eight
+  // places with no CSS at all, so on a phone the sidebar never hid and the
+  // menu button never appeared. This test ties the two files together.
+  async function read(file: string) {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    return fs.readFileSync(path.resolve(process.cwd(), file), 'utf8')
+  }
+
+  async function walk(dir: string): Promise<string[]> {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const out: string[] = []
+    for (const entry of fs.readdirSync(path.resolve(process.cwd(), dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`
+      if (entry.isDirectory()) out.push(...(await walk(rel)))
+      else if (entry.name.endsWith('.tsx')) out.push(rel)
+    }
+    return out
+  }
+
+  it('defines a rule for every data-r value the components use', async () => {
+    const css = await read('src/app/globals.css')
+
+    const used = new Set<string>()
+    for (const file of await walk('src')) {
+      const source = await read(file)
+      for (const m of source.matchAll(/data-r="([a-z0-9]+)"/g)) used.add(m[1])
+    }
+
+    expect(used.size, 'no data-r attributes found — did the markup change?').toBeGreaterThan(0)
+
+    const undefinedInCss = [...used].filter((name) => !css.includes(`[data-r='${name}']`))
+
+    expect(
+      undefinedInCss,
+      `data-r value(s) used in markup but with no rule in globals.css: ${undefinedInCss.join(', ')}. ` +
+        'Without a rule the attribute does nothing and the layout will not collapse on mobile.'
+    ).toEqual([])
+  })
+
+  it('hides the desktop sidebar and reveals the mobile menu on phones', async () => {
+    const css = await read('src/app/globals.css')
+    const phoneBlock = css.slice(css.indexOf('@media (max-width: 900px)'))
+
+    expect(phoneBlock).toContain("[data-r='rail']")
+    expect(phoneBlock).toMatch(/\[data-r='rail'\][\s\S]{0,60}display:\s*none/)
+    expect(phoneBlock).toMatch(/\[data-r='mobileonly'\][\s\S]{0,60}display:\s*flex/)
+  })
+})

@@ -233,3 +233,150 @@ html[data-dark] .w-chat-canvas {
 .w-noscroll {
   scrollbar-width: none;
 }
+
+/* ------------------------------------------------------------------
+   Responsive layer — ported from the prototype.
+
+   Components mark themselves with data-r="…" and these rules do the
+   collapsing. Without this block the attributes are inert: the sidebar
+   never hides on a phone and the mobile menu button never appears.
+
+     rail        the dark sidebar — desktop only
+     mobileonly  shown ONLY on phones (logo + screen picker)
+     hide        desktop-only chrome (store switcher, ⌘K badge)
+     pad         page padding, tightened on phones
+     search      topbar search, fluid on phones
+     grid        two-column layout -> single column
+     grid2/grid4 fixed grids -> fewer columns
+     scroll      wide tables get their own horizontal scroll
+     stack/wrap  flex rows -> columns
+------------------------------------------------------------------- */
+
+[data-r='mobileonly'] {
+  display: none;
+}
+
+/* Screens sit side by side and never scroll the page horizontally. */
+#w-screen-area {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+#w-screen-area > * {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+@media (max-width: 1300px) {
+  [data-r='grid'] {
+    grid-template-columns: 1fr !important;
+  }
+  [data-r='stack'] {
+    flex-direction: column !important;
+    height: auto !important;
+  }
+  [data-r='full'] {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  [data-r='scroll'] {
+    overflow-x: auto !important;
+  }
+  [data-r='wrap'] {
+    flex-wrap: wrap !important;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 8px !important;
+  }
+}
+
+@media (max-width: 900px) {
+  [data-r='rail'] {
+    display: none !important;
+  }
+  [data-r='mobileonly'] {
+    display: flex !important;
+  }
+  [data-r='hide'] {
+    display: none !important;
+  }
+  [data-r='grid2'] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  [data-r='pad'] {
+    padding: 14px 14px 26px !important;
+  }
+  [data-r='search'] {
+    width: auto !important;
+    flex: 1;
+    min-width: 0;
+  }
+  [data-r='wrap'] {
+    padding: 10px 12px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  [data-r='grid2'],
+  [data-r='grid4'] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (min-width: 561px) and (max-width: 900px) {
+  [data-r='grid4'] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Phone behaviour — make it feel like an app rather than a shrunk site
+------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  /* Use the real viewport height so the composer is not hidden behind
+     mobile browser chrome. */
+  .w-app-root {
+    height: 100dvh;
+  }
+
+  /* Never let a wide table drag the whole page sideways. */
+  body {
+    overflow-x: hidden;
+  }
+
+  /* Comfortable tap targets. */
+  button,
+  [role='switch'],
+  select {
+    min-height: 36px;
+  }
+
+  /* iOS zooms the page when a focused input is under 16px. */
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Respect the notch / home indicator on iOS. */
+.w-safe-bottom {
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+.w-safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.w-sheet {
+  animation: wsheet 0.18s ease-out;
+}
+@keyframes wsheet {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}

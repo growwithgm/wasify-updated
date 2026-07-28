@@ -10,7 +10,8 @@ import { Button, Input } from '@/components/ui'
 function LoginForm() {
   const router = useRouter()
   const params = useSearchParams()
-  const next = params.get('next') || '/dashboard'
+  // Fall back to '/', which routes phones to the Inbox and desktops to the Dashboard.
+  const next = params.get('next') || '/'
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
