@@ -1,4 +1,5 @@
 import { withAuth } from '@/lib/api'
+import { siteUrlStatus } from '@/lib/site-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,6 +49,11 @@ export async function GET() {
       apiKeys: apiKeys.data ?? [],
       approvedTemplates: templates.data ?? [],
       siteUrl: process.env.NEXT_PUBLIC_SITE_URL ?? null,
+      // The screen prints callback URLs built from siteUrl and offers a
+      // "Connect Shopify" button that depends on it. If it is unset or still
+      // the example placeholder, say so here rather than letting the merchant
+      // discover it on Shopify's error page.
+      siteUrlError: siteUrlStatus().message,
     }
   })
 }

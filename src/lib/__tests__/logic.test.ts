@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { sanitizePhone, isValidPhone, phonesMatch, phoneVariants, extractShopifyPhone, initialsOf } from '@/lib/phone'
 import { sessionWindow, canSendFreeText, WINDOW_MS } from '@/lib/window'
 import { normalize, matchesKeyword } from '@/lib/engines/types'
@@ -10,6 +12,7 @@ import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
 import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
+import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 
 /* ------------------------------------------------------------------ */
 /* Phone rules — the dedupe path everything else depends on            */
@@ -470,6 +473,73 @@ describe('health check', () => {
   it('never returns a secret value', async () => {
     const raw = JSON.stringify(await health({ ...FULL, META_APP_SECRET: 'super-secret-value' }))
     expect(raw).not.toContain('super-secret-value')
+  })
+
+  it('fails NEXT_PUBLIC_SITE_URL when it is still the example placeholder', async () => {
+    // The real incident: the placeholder was carried over from .env.example,
+    // so /api/health said "all set" while Shopify rejected every redirect.
+    const r = await health({ ...FULL, NEXT_PUBLIC_SITE_URL: 'https://your-app.vercel.app' })
+    expect(r.ok).toBe(false)
+    expect(r.configured.NEXT_PUBLIC_SITE_URL).toBe(false)
+    const entry = r.missing.required.find((m: any) => m.key === 'NEXT_PUBLIC_SITE_URL')
+    expect(entry.breaks).toMatch(/redirect_uri is not whitelisted/)
+    // Still prints the URL it would have used — that is what makes it obvious.
+    expect(r.shopify.redirectUrl).toBe('https://your-app.vercel.app/api/shopify/callback')
+    expect(r.shopify.siteUrlValid).toBe(false)
+  })
+
+  it('prints the exact Redirect URL to paste into the Partner Dashboard', async () => {
+    const r = await health(FULL)
+    expect(r.shopify.redirectUrl).toBe('https://app.vercel.app/api/shopify/callback')
+    expect(r.shopify.siteUrlValid).toBe(true)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* NEXT_PUBLIC_SITE_URL — a placeholder here surfaces as a Shopify     */
+/* error that names no variable, so it is caught before we send it.    */
+/* ------------------------------------------------------------------ */
+
+describe('site URL', () => {
+  it('accepts a real https origin and strips a trailing slash', () => {
+    expect(siteUrlStatus('https://wasify-updated.vercel.app').ok).toBe(true)
+    expect(siteUrl('https://wasify-updated.vercel.app/')).toBe('https://wasify-updated.vercel.app')
+    expect(siteUrl('  https://crm.example-store.com  ')).toBe('https://crm.example-store.com')
+  })
+
+  it('rejects every placeholder that ships in .env.example or a doc', () => {
+    for (const host of PLACEHOLDER_SITE_HOSTS) {
+      const s = siteUrlStatus(`https://${host}`)
+      expect(s.ok, host).toBe(false)
+      expect(s.ok ? '' : s.problem).toBe('placeholder')
+    }
+    // .env.example must ship a value this check actually rejects — otherwise
+    // the guard passes tests and still lets the real mistake through.
+    const example = readFileSync(join(process.cwd(), '.env.example'), 'utf8')
+    const shipped = example.match(/^NEXT_PUBLIC_SITE_URL=(.*)$/m)?.[1]?.trim()
+    expect(shipped, 'NEXT_PUBLIC_SITE_URL missing from .env.example').toBeTruthy()
+    expect(siteUrlStatus(shipped).ok).toBe(false)
+  })
+
+  it('rejects missing, malformed and http origins', () => {
+    expect(siteUrlStatus('').problem).toBe('missing')
+    expect(siteUrlStatus(undefined).problem).toBe('missing')
+    expect(siteUrlStatus('wasify-updated.vercel.app').problem).toBe('malformed') // no scheme
+    expect(siteUrlStatus('http://wasify-updated.vercel.app').problem).toBe('malformed') // not https
+  })
+
+  it('still allows local development', () => {
+    expect(siteUrlStatus('http://localhost:3000').ok).toBe(true)
+  })
+
+  it('explains what to do, including the redeploy that NEXT_PUBLIC_ needs', () => {
+    const s = siteUrlStatus('https://your-app.vercel.app')
+    const message = s.ok ? '' : s.message
+    expect(message).toContain('NEXT_PUBLIC_SITE_URL')
+    // Saving the variable in Vercel does nothing on its own: NEXT_PUBLIC_* is
+    // inlined at build time. Anyone who skips this reports "I already set it".
+    expect(message).toMatch(/redeploy/i)
+    expect(message).toMatch(/build time/i)
   })
 })
 

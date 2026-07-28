@@ -108,6 +108,15 @@ function IntegrationsScreen() {
         </div>
       )}
 
+      {data?.siteUrlError && (
+        <div
+          className="mb-4 rounded-[10px] border px-3 py-2.5 text-[12.5px] leading-relaxed"
+          style={{ background: 'var(--w-ambertint)', borderColor: 'var(--w-amber)', color: '#92400E' }}
+        >
+          <b>Fix this before connecting Shopify.</b> {data.siteUrlError}
+        </div>
+      )}
+
       {!data ? (
         <TableSkeleton rows={6} cols={4} />
       ) : (
@@ -383,7 +392,7 @@ function IntegrationsScreen() {
         />
       )}
 
-      {shopOpen && <ShopifyModal onClose={() => setShopOpen(false)} />}
+      {shopOpen && <ShopifyModal siteUrl={siteUrl} onClose={() => setShopOpen(false)} />}
 
       {keyOpen && (
         <ApiKeyModal
@@ -593,7 +602,7 @@ function WhatsAppModal({
   )
 }
 
-function ShopifyModal({ onClose }: { onClose: () => void }) {
+function ShopifyModal({ siteUrl, onClose }: { siteUrl: string; onClose: () => void }) {
   const [shop, setShop] = useState('')
 
   return (
@@ -623,6 +632,21 @@ function ShopifyModal({ onClose }: { onClose: () => void }) {
         placeholder="my-store.myshopify.com"
         hint="You'll be sent to Shopify to approve the permissions, then straight back here."
       />
+      <div
+        className="mt-3 rounded-[10px] border p-3 text-[12px] leading-relaxed"
+        style={{ background: 'var(--w-card2)', borderColor: 'var(--w-border)' }}
+      >
+        <div className="mb-1 font-semibold">Redirect URL for the Shopify Partner Dashboard</div>
+        <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+          {siteUrl}/api/shopify/callback
+        </code>
+        <div className="mt-2" style={{ color: 'var(--w-muted)' }}>
+          Paste it under <b>Configuration → URLs → Redirect URLs</b> and release the version. If it is not
+          listed there character-for-character, Shopify answers{' '}
+          <i>“The redirect_uri is not whitelisted”</i> instead of showing the approval screen.
+        </div>
+      </div>
+
       <div className="mt-3 text-[12px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
         Wasify requests read access to customers, orders, checkouts, fulfillments and products, plus write
         access to orders (for COD tags) and discounts (for single-use recovery codes). Widening scopes later

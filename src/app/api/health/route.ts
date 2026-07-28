@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { cronAuthHint } from '@/lib/cron'
+import { siteUrlStatus } from '@/lib/site-url'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,6 +27,7 @@ function isHex64(value: string | undefined): boolean {
 
 export async function GET() {
   const env = process.env
+  const site = siteUrlStatus()
 
   const checks: Check[] = [
     {
@@ -57,9 +59,11 @@ export async function GET() {
     },
     {
       key: 'NEXT_PUBLIC_SITE_URL',
-      ok: !!env.NEXT_PUBLIC_SITE_URL,
+      // Present is not enough: the example file's placeholder is a real string
+      // that produces a well-formed URL pointing at somebody else's domain.
+      ok: site.ok,
       required: true,
-      breaks: 'Shopify OAuth and the webhook callback URLs are built wrong.',
+      breaks: site.ok ? '' : site.message,
     },
     {
       key: 'META_APP_SECRET',
@@ -92,7 +96,9 @@ export async function GET() {
   const missingRequired = checks.filter((c) => c.required && !c.ok)
   const missingOptional = checks.filter((c) => !c.required && !c.ok)
 
-  const siteUrl = env.NEXT_PUBLIC_SITE_URL ?? ''
+  // Show what the URLs currently resolve to even when the value is wrong —
+  // seeing "your-app.vercel.app" printed back is usually the moment it clicks.
+  const siteUrl = (env.NEXT_PUBLIC_SITE_URL ?? '').trim().replace(/\/+$/, '')
 
   return NextResponse.json(
     {
@@ -114,6 +120,14 @@ export async function GET() {
       webhooks: {
         whatsapp: `${siteUrl}/api/whatsapp/webhook`,
         shopify: `${siteUrl}/api/shopify/webhook`,
+      },
+      shopify: {
+        // Paste this verbatim into Partner Dashboard → Configuration →
+        // Redirect URLs, then Release the version. A mismatch of even one
+        // character is "The redirect_uri is not whitelisted".
+        redirectUrl: `${siteUrl}/api/shopify/callback`,
+        siteUrlValid: site.ok,
+        siteUrlProblem: site.ok ? null : site.problem,
       },
       cron: {
         tick: `${siteUrl}/api/cron/tick`,

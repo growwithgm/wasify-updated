@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { SHOPIFY_SCOPES } from '@/lib/shopify/admin'
+import { siteUrlStatus } from '@/lib/site-url'
 import { randomToken } from '@/lib/crypto'
 
 export const runtime = 'nodejs'
@@ -29,13 +30,32 @@ export async function GET(request: Request) {
   }
 
   const clientId = process.env.SHOPIFY_CLIENT_ID
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL
-  if (!clientId || !siteUrl) {
+  if (!clientId) {
     return NextResponse.json(
-      { error: 'SHOPIFY_CLIENT_ID and NEXT_PUBLIC_SITE_URL must be set' },
+      { error: 'SHOPIFY_CLIENT_ID is not set. Copy it from your Shopify app’s Client credentials.' },
       { status: 500 }
     )
   }
+
+  // Refuse to build a redirect_uri we already know Shopify will reject.
+  // Sending it anyway produces "The redirect_uri is not whitelisted" on
+  // Shopify's domain, which says nothing about which variable is wrong.
+  const site = siteUrlStatus()
+  if (!site.ok) {
+    return NextResponse.json(
+      {
+        error: site.message,
+        variable: 'NEXT_PUBLIC_SITE_URL',
+        problem: site.problem,
+        redirectUriShopifyWouldHaveSeen: site.value ? `${site.value}/api/shopify/callback` : null,
+        alsoAdd:
+          'Whatever you set here, the matching /api/shopify/callback URL must also be listed under ' +
+          'Redirect URLs in the Shopify Partner Dashboard, and the version released.',
+      },
+      { status: 500 }
+    )
+  }
+  const siteUrl = site.url
 
   // The merchant must already be signed in — the callback binds the store to them.
   const supabase = await createClient()

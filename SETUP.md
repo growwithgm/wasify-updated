@@ -138,7 +138,7 @@ In the Partner Dashboard, **Configuration** (or **Create version**):
 | **Preferences URL** | leave empty | Optional; only used by embedded apps. |
 | **Webhooks API version** | `2026-04` | Must match `SHOPIFY_API_VERSION` in `src/lib/shopify/admin.ts`, or a payload can arrive in a shape the parsers were not written against. |
 | **Use legacy install flow** | ☐ **UNCHECKED** | Leave Shopify managed installation on — it is the recommended path, and scopes come from the list below. |
-| **Redirect URLs** | `https://YOUR-APP.vercel.app/api/shopify/callback` | **The single most common blocker.** Empty here means OAuth fails with *"redirect_uri is not whitelisted"*. Must match exactly — a trailing slash breaks it. |
+| **Redirect URLs** | `https://YOUR-APP.vercel.app/api/shopify/callback` | **The single most common blocker.** Empty here means OAuth fails with *"redirect_uri is not whitelisted"*. Must match exactly — a trailing slash breaks it. It has to equal `NEXT_PUBLIC_SITE_URL` + `/api/shopify/callback`: `/api/health` prints that exact string under `shopify.redirectUrl`, and so does the Connect-store dialog. Copy it from there rather than typing it. |
 
 ### 4c. Scopes — copy this line exactly
 
@@ -204,8 +204,15 @@ Import the repo, then **Settings → Environment Variables**. Add all of these t
 | `SHOPIFY_CLIENT_ID` | Step 4 — Client ID | Only for Shopify |
 | `SHOPIFY_CLIENT_SECRET` | Step 4 — Client secret | Only for Shopify |
 
-**Three traps with `NEXT_PUBLIC_SITE_URL`:**
+**Four traps with `NEXT_PUBLIC_SITE_URL`:**
 
+- **Never leave the example value.** `.env.example` ships
+  `https://your-app.vercel.app`, and copying that file into Vercel wholesale
+  carries the placeholder through as a real value. It looks fine — it *is* a
+  valid URL — but it is not your domain, so Shopify replies *"The redirect_uri
+  is not whitelisted"*, and the Integrations screen prints webhook URLs on a
+  domain you do not own. The app now refuses to start OAuth in that state and
+  says so, and `/api/health` marks the variable failed rather than present.
 - **Use *this* project's domain.** Find it in Vercel under **Settings →
   Domains**, or on the deployment card as *Assigned domains*. If you also had
   an older Wasify project deployed, its domain is a different app — pointing
@@ -422,7 +429,7 @@ Both stay off until you enable them, so nothing is sent by accident.
 | Deploy fails: *`vercel.json` schema validation failed … should NOT have additional property* | Vercel rejects any key it does not recognise, including comment-style keys like `_note`. JSON has no comments. This repo ships **no `vercel.json`** at all — Next.js needs none. Delete the file or strip the offending key. |
 | WhatsApp webhook returns `503` | `META_APP_SECRET` is not set. This is deliberate: an unverified webhook would let anyone who knows the URL inject messages into your inbox. |
 | Webhook verification fails in Meta | The verify token does not match. Press **Generate** in Wasify again and re-paste. |
-| Shopify OAuth: *"redirect_uri is not whitelisted"* | **Redirect URLs** is empty, or does not match `NEXT_PUBLIC_SITE_URL` + `/api/shopify/callback` exactly. See Step 4b. |
+| Shopify OAuth: *"redirect_uri is not whitelisted"* | Read the `redirect_uri=` in the failing URL's address bar — it is exactly what Shopify was asked to accept. If it says `your-app.vercel.app`, `NEXT_PUBLIC_SITE_URL` is still the example value (Step 5). Otherwise **Redirect URLs** in the Partner Dashboard is empty or does not match it character-for-character — including the trailing slash. Both sides must agree. See Step 4b. |
 | Shopify connects, but no orders or carts arrive | A webhook could not be registered because its scope was missing. Check Step 4c — `checkouts/*` needs `read_orders`, `fulfillments/*` needs `read_fulfillments`. Then Release the version and **Reconnect**. |
 | Cart reminders send with no discount code | `write_discounts` was not granted. Release the version, then Integrations → Shopify → Reconnect. |
 | Shopify admin shows the app in a frame and login loops | **Embed app in Shopify admin** is ticked. Untick it — this app is not embedded, and its cookies are blocked inside that iframe. |
