@@ -6,6 +6,7 @@ import { encrypt, safeEqual } from '@/lib/crypto'
 import { adminGraphql, SHOPIFY_SCOPES } from '@/lib/shopify/admin'
 import { normalizeShopDomain } from '../connect/route'
 import { registerShopifyWebhooks } from '@/lib/shopify/webhooks'
+import { canPersistTokens } from '@/lib/config'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,6 +24,18 @@ export async function GET(request: Request) {
   const fail = (reason: string) =>
     NextResponse.redirect(`${siteUrl}/integrations?shopify_error=${encodeURIComponent(reason)}`)
 
+  try {
+    return await handle(request, siteUrl, fail)
+  } catch (e: any) {
+    // Anything unhandled here used to surface as a bare "HTTP ERROR 500" on
+    // Shopify's return trip, with no clue which step died. Every failure must
+    // land back on Integrations with a reason attached.
+    console.error('[shopify-callback] unhandled', e)
+    return fail(`Unexpected error: ${e?.message ?? e}`)
+  }
+}
+
+async function handle(request: Request, siteUrl: string, fail: (reason: string) => NextResponse) {
   const url = new URL(request.url)
   const shop = normalizeShopDomain(url.searchParams.get('shop') ?? '')
   const code = url.searchParams.get('code')
@@ -50,6 +63,12 @@ export async function GET(request: Request) {
 
   const digest = crypto.createHmac('sha256', secret).update(message).digest('hex')
   if (!safeEqual(digest, hmac)) return fail('HMAC verification failed')
+
+  /* --------------------- can we even store the result? ---------------- */
+  // Deliberately before the exchange: `code` is single-use, so discovering a
+  // missing ENCRYPTION_KEY *after* spending it would force a pointless retry.
+  const persist = canPersistTokens()
+  if (!persist.ok) return fail(persist.message)
 
   /* -------------------------- token exchange -------------------------- */
   let tokenJson: { access_token: string; scope?: string; expires_in?: number; refresh_token?: string }

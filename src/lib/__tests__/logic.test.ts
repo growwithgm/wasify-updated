@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHmac } from 'node:crypto'
 import { sanitizePhone, isValidPhone, phonesMatch, phoneVariants, extractShopifyPhone, initialsOf } from '@/lib/phone'
 import { sessionWindow, canSendFreeText, WINDOW_MS } from '@/lib/window'
 import { normalize, matchesKeyword } from '@/lib/engines/types'
@@ -435,7 +436,9 @@ describe('health check', () => {
   it('rejects an ENCRYPTION_KEY that is not 64 hex characters', async () => {
     const short = await health({ ...FULL, ENCRYPTION_KEY: 'too-short-not-hex' })
     expect(short.configured.ENCRYPTION_KEY).toBe(false)
-    expect(short.missing.required.find((m: any) => m.key === 'ENCRYPTION_KEY').breaks).toMatch(/INVALID/)
+    const breaks = short.missing.required.find((m: any) => m.key === 'ENCRYPTION_KEY').breaks
+    expect(breaks).toMatch(/invalid/i)
+    expect(breaks).toMatch(/64 hex/)
 
     const wrongLength = await health({ ...FULL, ENCRYPTION_KEY: 'ab'.repeat(16) }) // 32 chars
     expect(wrongLength.configured.ENCRYPTION_KEY).toBe(false)
@@ -540,6 +543,133 @@ describe('site URL', () => {
     // inlined at build time. Anyone who skips this reports "I already set it".
     expect(message).toMatch(/redeploy/i)
     expect(message).toMatch(/build time/i)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Shopify OAuth callback                                              */
+/*                                                                     */
+/* This runs on Shopify's return trip, so an uncaught throw is a bare  */
+/* "HTTP ERROR 500" in the merchant's browser naming no cause. Every   */
+/* failure has to come back as a readable reason instead.              */
+/* ------------------------------------------------------------------ */
+
+describe('shopify callback', () => {
+  // The parameters of a real return trip, signed for whichever secret the
+  // case under test uses — otherwise the HMAC gate rejects before the step
+  // being tested is ever reached.
+  const PARAMS = {
+    code: 'e6a759de39ccf16c12c7f0b0b950c868',
+    host: 'YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvZG9uY2FiZWxsb3Bybw',
+    shop: 'doncabellopro.myshopify.com',
+    state: 'c4de20e00e1c62ad9e7182427d13543d',
+    timestamp: '1785275422',
+  }
+
+  function signedCallback(secret: string): string {
+    const url = new URL('https://wasify-updated.vercel.app/api/shopify/callback')
+    for (const [k, v] of Object.entries(PARAMS)) url.searchParams.set(k, v)
+    const message = Object.entries(PARAMS)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&')
+    url.searchParams.set('hmac', createHmac('sha256', secret).update(message).digest('hex'))
+    return url.toString()
+  }
+
+  /** Run the route with a chosen cookie jar and environment. */
+  async function callback(env: Record<string, string | undefined>, jar: Record<string, string> = {}) {
+    vi.resetModules()
+    vi.doMock('next/headers', () => ({
+      cookies: async () => ({
+        get: (name: string) => (jar[name] === undefined ? undefined : { name, value: jar[name] }),
+        set: () => {},
+        delete: () => {},
+      }),
+    }))
+
+    const saved = { ...process.env }
+    for (const k of [
+      'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'ENCRYPTION_KEY',
+      'NEXT_PUBLIC_SITE_URL', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET',
+    ]) delete process.env[k]
+    Object.assign(process.env, env)
+
+    try {
+      const { GET } = await import('@/app/api/shopify/callback/route')
+      const res = await GET(new Request(signedCallback(env.SHOPIFY_CLIENT_SECRET ?? '')))
+      const location = res.headers.get('location') ?? ''
+      return { status: res.status, location, reason: new URL(location).searchParams.get('shopify_error') }
+    } finally {
+      process.env = saved
+      vi.doUnmock('next/headers')
+      vi.resetModules()
+    }
+  }
+
+  const BASE = {
+    NEXT_PUBLIC_SITE_URL: 'https://wasify-updated.vercel.app',
+    SHOPIFY_CLIENT_ID: 'id',
+    SHOPIFY_CLIENT_SECRET: 'secret',
+    NEXT_PUBLIC_SUPABASE_URL: 'https://x.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'service-role',
+    ENCRYPTION_KEY: 'a'.repeat(64),
+  }
+
+  // The state cookie is what a real round trip carries back.
+  const JAR = {
+    shopify_oauth_state: 'c4de20e00e1c62ad9e7182427d13543d',
+    shopify_oauth_user: '00000000-0000-0000-0000-000000000001',
+  }
+
+  it('redirects to Integrations with a reason instead of throwing a 500', async () => {
+    // No state cookie — the browser dropped it or the attempt is forged.
+    const r = await callback(BASE, {})
+    expect(r.status).toBe(307)
+    expect(r.location).toContain('/integrations?shopify_error=')
+    expect(r.reason).toMatch(/state/i)
+  })
+
+  it('names ENCRYPTION_KEY rather than dying inside encrypt()', async () => {
+    // Previously this threw on the happy path — after the handshake had
+    // already succeeded — and surfaced as a bare HTTP ERROR 500.
+    const r = await callback({ ...BASE, ENCRYPTION_KEY: undefined }, JAR)
+    expect(r.status).toBe(307)
+    expect(r.reason).toContain('ENCRYPTION_KEY')
+    expect(r.reason).toMatch(/openssl rand -hex 32/)
+  })
+
+  it('names SUPABASE_SERVICE_ROLE_KEY rather than dying inside createServiceClient()', async () => {
+    const r = await callback({ ...BASE, SUPABASE_SERVICE_ROLE_KEY: undefined }, JAR)
+    expect(r.reason).toContain('SUPABASE_SERVICE_ROLE_KEY')
+  })
+
+  it('rejects a key of the wrong length, not just a missing one', async () => {
+    const r = await callback({ ...BASE, ENCRYPTION_KEY: 'abc123' }, JAR)
+    expect(r.reason).toMatch(/64 hex/)
+  })
+
+  it('checks it can store the token BEFORE spending the single-use code', async () => {
+    // If the config check ran after the exchange, the code would be burned and
+    // the merchant would have to restart OAuth even once the variable is fixed.
+    // A fetch here would mean the exchange was attempted.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    await callback({ ...BASE, ENCRYPTION_KEY: undefined }, JAR)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('never leaks the client secret into the redirect', async () => {
+    // Config is valid here, so the route reaches the token exchange — stub it
+    // rather than letting a unit test call a real storefront.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('nope', { status: 400 }))
+    const r = await callback({ ...BASE, SHOPIFY_CLIENT_SECRET: 'shpss_do_not_leak' }, JAR)
+    expect(fetchSpy).toHaveBeenCalled()
+    expect(r.reason).toMatch(/Token exchange failed \(400\)/)
+    expect(r.location).not.toContain('shpss_do_not_leak')
+    fetchSpy.mockRestore()
   })
 })
 

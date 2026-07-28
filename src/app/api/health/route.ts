@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { cronAuthHint } from '@/lib/cron'
 import { siteUrlStatus } from '@/lib/site-url'
+import { encryptionKeyStatus, serviceRoleStatus } from '@/lib/config'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,13 +22,11 @@ type Check = {
   breaks: string
 }
 
-function isHex64(value: string | undefined): boolean {
-  return !!value && /^[0-9a-fA-F]{64}$/.test(value.trim())
-}
-
 export async function GET() {
   const env = process.env
   const site = siteUrlStatus()
+  const encryption = encryptionKeyStatus()
+  const serviceRole = serviceRoleStatus()
 
   const checks: Check[] = [
     {
@@ -46,16 +45,17 @@ export async function GET() {
       key: 'SUPABASE_SERVICE_ROLE_KEY',
       ok: !!env.SUPABASE_SERVICE_ROLE_KEY,
       required: true,
-      breaks: 'Webhooks, cron sweeps and all sending fail.',
+      breaks: serviceRole.ok
+        ? ''
+        : `${serviceRole.message} Webhooks, cron sweeps and the Shopify callback all fail without it.`,
     },
     {
       key: 'ENCRYPTION_KEY',
-      ok: isHex64(env.ENCRYPTION_KEY),
+      ok: encryption.ok,
       required: true,
-      breaks:
-        env.ENCRYPTION_KEY && !isHex64(env.ENCRYPTION_KEY)
-          ? 'Set but INVALID — it must be exactly 64 hex characters (openssl rand -hex 32).'
-          : 'WhatsApp and Shopify tokens cannot be saved or read.',
+      breaks: encryption.ok
+        ? ''
+        : `${encryption.message} Connecting WhatsApp or Shopify fails at the moment the token is saved.`,
     },
     {
       key: 'NEXT_PUBLIC_SITE_URL',

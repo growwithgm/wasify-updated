@@ -28,6 +28,7 @@ function IntegrationsScreen() {
   const [keyOpen, setKeyOpen] = useState(false)
   const [diagnostics, setDiagnostics] = useState<any>(null)
   const [busy, setBusy] = useState('')
+  const [oauthError, setOauthError] = useState('')
 
   const load = useCallback(async () => {
     setError('')
@@ -45,11 +46,12 @@ function IntegrationsScreen() {
     load()
   }, [load])
 
-  // Surface the OAuth round-trip result.
+  // Surface the OAuth round-trip result. Success is a toast; a failure is a
+  // banner that stays put — these messages name the variable to fix and are
+  // far too long to read before a toast fades.
   useEffect(() => {
     if (params.get('shopify') === 'connected') toast('Shopify connected')
-    const err = params.get('shopify_error')
-    if (err) toast(err, 'red')
+    setOauthError(params.get('shopify_error') ?? '')
   }, [params, toast])
 
   async function runDiagnostics() {
@@ -105,6 +107,15 @@ function IntegrationsScreen() {
       {error && (
         <div className="mb-4">
           <ErrorState error={error} onRetry={load} />
+        </div>
+      )}
+
+      {oauthError && (
+        <div
+          className="mb-4 rounded-[10px] border px-3 py-2.5 text-[12.5px] leading-relaxed"
+          style={{ background: 'var(--w-errortint)', borderColor: 'var(--w-error)', color: '#B91C1C' }}
+        >
+          <b>Shopify connection failed.</b> {oauthError}
         </div>
       )}
 
