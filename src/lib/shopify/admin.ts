@@ -25,6 +25,12 @@ export type ShopifyConfig = {
   scopes: string | null
   webhooks_registered: boolean | null
   connection_status: string | null
+  /**
+   * shopify_config also carries every `cod_*` and `recovery_*` feature column
+   * (see supabase/schema.sql §12). They are read by the COD and recovery
+   * engines and are too numerous — and too likely to grow — to restate here.
+   */
+  [featureColumn: string]: any
 }
 
 /**
@@ -80,7 +86,9 @@ export async function getValidToken(config: ShopifyConfig): Promise<string | nul
   }
 }
 
-export async function getShopifyConfig(userId: string) {
+export async function getShopifyConfig(
+  userId: string
+): Promise<(ShopifyConfig & { token: string }) | null> {
   const db = createServiceClient()
   const { data } = await db.from('shopify_config').select('*').eq('user_id', userId).maybeSingle()
   if (!data) return null
@@ -88,7 +96,9 @@ export async function getShopifyConfig(userId: string) {
   return token ? { ...(data as ShopifyConfig), token } : null
 }
 
-export async function configByStoreDomain(domain: string) {
+export async function configByStoreDomain(
+  domain: string
+): Promise<(ShopifyConfig & { token: string }) | null> {
   const db = createServiceClient()
   const { data } = await db.from('shopify_config').select('*').eq('store_domain', domain).maybeSingle()
   if (!data) return null
