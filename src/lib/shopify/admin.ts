@@ -1,8 +1,35 @@
 import { decrypt, encrypt } from '@/lib/crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 
+/**
+ * Admin API version. The Partner Dashboard's "Webhooks API version" should be
+ * set to the SAME value, so a payload never arrives in a shape the parsers
+ * were not written against.
+ */
 export const SHOPIFY_API_VERSION = '2026-04'
 
+/**
+ * Scopes, and why each one is here. This list must match the Partner
+ * Dashboard exactly — see SETUP.md Step 4.
+ *
+ * Removing any of these silently breaks a feature rather than erroring:
+ * Shopify simply refuses to register the webhook, and the corresponding
+ * automation never fires.
+ *
+ *   read_customers    contact name/email when mirroring orders and checkouts
+ *   read_orders       orders/* AND checkouts/* webhooks (checkout topics are
+ *                     gated on read_orders, not read_checkouts), plus the
+ *                     order backfill
+ *   write_orders      COD tags — "COD Pending" -> "COD Confirmed"/"Cancelled"
+ *   read_checkouts    the REST checkouts.json backfill used for cart history
+ *   read_fulfillments fulfillments/create and fulfillments/update webhooks
+ *   read_products     catalog mirror on the Catalog screen
+ *   read_discounts    reading existing discounts
+ *   write_discounts   minting the single-use cart-recovery codes
+ *
+ * Deliberately NOT requested: read_product_listings and read_validations are
+ * for sales channels and checkout functions, neither of which this app is.
+ */
 export const SHOPIFY_SCOPES = [
   'read_customers',
   'read_orders',

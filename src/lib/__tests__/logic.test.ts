@@ -650,3 +650,59 @@ describe('responsive CSS', () => {
     expect(phoneBlock).toMatch(/\[data-r='mobileonly'\][\s\S]{0,60}display:\s*flex/)
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* Shopify scopes vs webhook topics                                     */
+/* ------------------------------------------------------------------ */
+
+describe('Shopify scopes', () => {
+  // Shopify refuses to register a webhook whose scope was not granted, and it
+  // does so quietly at connect time — the feature then just never fires. This
+  // pins each topic to the scope Shopify actually gates it on. Note that the
+  // checkouts/* topics are gated on read_orders, NOT read_checkouts, which is
+  // easy to get wrong from the name alone.
+  const TOPIC_SCOPE: Record<string, string | null> = {
+    'orders/create': 'read_orders',
+    'orders/updated': 'read_orders',
+    'orders/cancelled': 'read_orders',
+    'checkouts/create': 'read_orders',
+    'checkouts/update': 'read_orders',
+    'fulfillments/create': 'read_fulfillments',
+    'fulfillments/update': 'read_fulfillments',
+    'app/uninstalled': null, // no scope required
+    'shop/redact': null, // GDPR compliance topic, no scope required
+  }
+
+  it('requests a scope for every webhook topic it registers', async () => {
+    const { SHOPIFY_SCOPES } = await import('@/lib/shopify/admin')
+    const { WEBHOOK_TOPICS } = await import('@/lib/shopify/webhooks')
+
+    const granted = new Set<string>(SHOPIFY_SCOPES)
+    const missing: string[] = []
+
+    for (const topic of WEBHOOK_TOPICS) {
+      const needed = TOPIC_SCOPE[topic]
+      if (needed === undefined) {
+        missing.push(`${topic} (no scope mapping — add one to this test)`)
+      } else if (needed && !granted.has(needed)) {
+        missing.push(`${topic} needs ${needed}`)
+      }
+    }
+
+    expect(missing, `Webhook topics without their scope: ${missing.join('; ')}`).toEqual([])
+  })
+
+  it('does not request scopes nothing uses', async () => {
+    const { SHOPIFY_SCOPES } = await import('@/lib/shopify/admin')
+    // Merchants see this list at install time, so an unexplained scope costs
+    // trust. These two are for sales channels and checkout functions.
+    expect(SHOPIFY_SCOPES).not.toContain('read_product_listings')
+    expect(SHOPIFY_SCOPES).not.toContain('read_validations')
+  })
+
+  it('keeps write_discounts, without which cart recovery silently drops codes', async () => {
+    const { SHOPIFY_SCOPES } = await import('@/lib/shopify/admin')
+    expect(SHOPIFY_SCOPES).toContain('write_discounts')
+    expect(SHOPIFY_SCOPES).toContain('write_orders') // COD tagging
+  })
+})

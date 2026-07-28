@@ -97,6 +97,13 @@ enforced in code, and most are covered by a test.
 10. **Marketing needs consent.** STOP / BAJA / PARAR / UNSUBSCRIBE opt a
     contact out instantly and suppress their number. COD confirmations are
     transactional and unaffected.
+11. **Shopify scopes must match the Partner Dashboard exactly.** Shopify
+    refuses to register a webhook whose scope was not granted, and does so
+    quietly at connect time — the feature then never fires. Note that
+    `checkouts/*` is gated on `read_orders`, not `read_checkouts`. Widening
+    scopes needs merchant re-consent; old tokens keep old scopes until they
+    reconnect. The exact list and a per-scope explanation are in
+    [SETUP.md Step 4](SETUP.md); a test pins every topic to its scope.
 
 ---
 

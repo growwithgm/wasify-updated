@@ -114,23 +114,76 @@ deploy, because they are encrypted and stored per account.
 
 ## Step 4 — Shopify *(skip if you are not using Shopify yet)*
 
-1. [partners.shopify.com](https://partners.shopify.com) → **Apps** → your app
-   (or **Create app → Create app manually**)
-2. **Configuration → Client credentials**
+Skip this whole step if Shopify is not connected yet — every other feature
+works without it.
+
+### 4a. Copy the credentials
+
+[partners.shopify.com](https://partners.shopify.com) → **Apps** → your app
+(or **Create app → Create app manually**) → **Configuration → Client credentials**
 
 | Copy this | Into this variable |
 |---|---|
 | Client ID (older UI: *API key*) | `SHOPIFY_CLIENT_ID` |
 | Client secret (older UI: *API secret key*) | `SHOPIFY_CLIENT_SECRET` |
 
-3. Still in **Configuration → URLs**, set:
-   - App URL: `https://YOUR-APP.vercel.app`
-   - Allowed redirection URL: `https://YOUR-APP.vercel.app/api/shopify/callback`
+### 4b. App settings — the exact values
 
-The redirect URL must match **exactly** — a trailing slash breaks OAuth.
+In the Partner Dashboard, **Configuration** (or **Create version**):
 
-Leave both unset for now if you are not ready. Everything except the Shopify
-features still works.
+| Field | Value | Why |
+|---|---|---|
+| **App URL** | `https://YOUR-APP.vercel.app` | Not `https://example.com`. Where Shopify sends merchants. |
+| **Embed app in Shopify admin** | ☐ **UNCHECKED** | Wasify is a standalone app at its own domain with its own login. Embedded apps run in an iframe inside Shopify admin and need App Bridge and session tokens — and the session cookies this app sets are blocked in that third-party iframe, so ticking this breaks sign-in. |
+| **Preferences URL** | leave empty | Optional; only used by embedded apps. |
+| **Webhooks API version** | `2026-04` | Must match `SHOPIFY_API_VERSION` in `src/lib/shopify/admin.ts`, or a payload can arrive in a shape the parsers were not written against. |
+| **Use legacy install flow** | ☐ **UNCHECKED** | Leave Shopify managed installation on — it is the recommended path, and scopes come from the list below. |
+| **Redirect URLs** | `https://YOUR-APP.vercel.app/api/shopify/callback` | **The single most common blocker.** Empty here means OAuth fails with *"redirect_uri is not whitelisted"*. Must match exactly — a trailing slash breaks it. |
+
+### 4c. Scopes — copy this line exactly
+
+Paste into **API access → Scopes**, as one comma-separated line with no spaces:
+
+```
+read_customers,read_orders,write_orders,read_checkouts,read_fulfillments,read_products,read_discounts,write_discounts
+```
+
+Leave **Optional scopes** empty.
+
+This must match `SHOPIFY_SCOPES` in `src/lib/shopify/admin.ts`. What each one
+is for:
+
+| Scope | Without it |
+|---|---|
+| `read_customers` | Orders and carts mirror with no customer name or email |
+| `read_orders` | No `orders/*` **and no `checkouts/*` webhooks** — Shopify gates the checkout topics on `read_orders`, not on `read_checkouts` |
+| `write_orders` | COD tags never applied — no "COD Pending" → "COD Confirmed" in Shopify |
+| `read_checkouts` | The abandoned-cart backfill cannot read checkout history |
+| `read_fulfillments` | No `fulfillments/*` webhooks — no tracking numbers on the contact drawer |
+| `read_products` | The Catalog screen stays empty |
+| `read_discounts` | Cannot read existing discounts |
+| `write_discounts` | Cart recovery sends **without** a discount code — quietly, by design, since a code failure must never block the reminder |
+
+Two scopes are deliberately **not** requested, and should be removed if a
+previous version added them: `read_product_listings` (for sales channels) and
+`read_validations` (for checkout functions). Wasify is neither, and every extra
+scope is one more thing the merchant sees at install time.
+
+> Shopify refuses to register a webhook whose scope was not granted, and it
+> does so **quietly at connect time**. The feature then simply never fires. A
+> test in this repo pins every topic to the scope Shopify gates it on, so the
+> two lists cannot drift.
+
+### 4d. After changing scopes
+
+Widening scopes does **not** apply to already-installed stores. Existing tokens
+keep their old scopes until the merchant re-approves, so:
+
+1. **Release** the new version in the Partner Dashboard.
+2. In Wasify: **Integrations → Shopify → Reconnect**, and approve the new list.
+
+The Catalog screen shows a reconnect banner when `write_discounts` is missing,
+which is the usual symptom of a version released but never re-approved.
 
 ---
 
@@ -369,7 +422,10 @@ Both stay off until you enable them, so nothing is sent by accident.
 | Deploy fails: *`vercel.json` schema validation failed … should NOT have additional property* | Vercel rejects any key it does not recognise, including comment-style keys like `_note`. JSON has no comments. This repo ships **no `vercel.json`** at all — Next.js needs none. Delete the file or strip the offending key. |
 | WhatsApp webhook returns `503` | `META_APP_SECRET` is not set. This is deliberate: an unverified webhook would let anyone who knows the URL inject messages into your inbox. |
 | Webhook verification fails in Meta | The verify token does not match. Press **Generate** in Wasify again and re-paste. |
-| Shopify OAuth: *"redirect_uri is not whitelisted"* | The Allowed redirection URL in the Partner Dashboard does not match `NEXT_PUBLIC_SITE_URL` + `/api/shopify/callback` exactly. |
+| Shopify OAuth: *"redirect_uri is not whitelisted"* | **Redirect URLs** is empty, or does not match `NEXT_PUBLIC_SITE_URL` + `/api/shopify/callback` exactly. See Step 4b. |
+| Shopify connects, but no orders or carts arrive | A webhook could not be registered because its scope was missing. Check Step 4c — `checkouts/*` needs `read_orders`, `fulfillments/*` needs `read_fulfillments`. Then Release the version and **Reconnect**. |
+| Cart reminders send with no discount code | `write_discounts` was not granted. Release the version, then Integrations → Shopify → Reconnect. |
+| Shopify admin shows the app in a frame and login loops | **Embed app in Shopify admin** is ticked. Untick it — this app is not embedded, and its cookies are blocked inside that iframe. |
 | Cron returns `401` | Usually the wrong header for the variable you set: `CRON_SECRET` needs `Authorization: Bearer <secret>`, `AUTOMATION_CRON_SECRET` needs `x-cron-secret: <secret>`. The `401` body names the right one. |
 | Cart reminders never send | Recovery not enabled, no template set for that stage, or the cron job still points at the old app's URL. |
 | Templates will not send | Only **Approved** templates can be sent. Press **Sync from Meta** on the Templates screen. |
