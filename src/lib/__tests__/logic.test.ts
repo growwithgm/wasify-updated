@@ -12,6 +12,7 @@ import { bestFaq } from '@/lib/engines/chatbot'
 import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
 import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
+import { rowTagNames } from '@/app/api/contacts/import/route'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -909,6 +910,33 @@ describe('Shopify scopes', () => {
     const { SHOPIFY_SCOPES } = await import('@/lib/shopify/admin')
     expect(SHOPIFY_SCOPES).toContain('write_discounts')
     expect(SHOPIFY_SCOPES).toContain('write_orders') // COD tagging
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* CSV import — per-row tags                                           */
+/* ------------------------------------------------------------------ */
+
+describe('CSV tag column', () => {
+  it('applies the tag on each row', () => {
+    expect(rowTagNames({ phone: '34600', Etiqueta: 'VIP' }, ['Etiqueta'])).toEqual(['VIP'])
+  })
+
+  it('splits several tags in one cell', () => {
+    // "VIP, Madrid" in a spreadsheet means two tags, not one tag named
+    // "VIP, Madrid" — which is what a naive trim would have created.
+    expect(rowTagNames({ t: 'VIP, Madrid' }, ['t'])).toEqual(['VIP', 'Madrid'])
+    expect(rowTagNames({ t: 'VIP;Madrid|Wholesale' }, ['t'])).toEqual(['VIP', 'Madrid', 'Wholesale'])
+  })
+
+  it('reads every column mapped to tag, not only the first', () => {
+    expect(rowTagNames({ a: 'VIP', b: 'Madrid' }, ['a', 'b'])).toEqual(['VIP', 'Madrid'])
+  })
+
+  it('collapses duplicates case-insensitively and ignores blanks', () => {
+    expect(rowTagNames({ a: 'VIP', b: 'vip' }, ['a', 'b'])).toEqual(['VIP'])
+    expect(rowTagNames({ a: ' , ;; ', b: '' }, ['a', 'b'])).toEqual([])
+    expect(rowTagNames({}, [])).toEqual([])
   })
 })
 

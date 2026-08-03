@@ -766,7 +766,17 @@ function ImportModal({
 
           <div className="mt-3 text-[12.5px]" style={{ color: 'var(--w-muted)' }}>
             Rows whose phone matched an existing contact were merged rather than duplicated.
+            {result.tagsCreated > 0 && ` ${result.tagsCreated} tag(s) came from the file.`}
           </div>
+
+          {result.tagWarning && (
+            <div
+              className="mt-2 rounded-lg px-3 py-2 text-[12.5px]"
+              style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+            >
+              {result.tagWarning}
+            </div>
+          )}
 
           {result.errors?.length > 0 && (
             <>
@@ -805,6 +815,10 @@ function ImportModal({
               <span className="text-[13.5px] font-semibold">Choose a CSV file</span>
               <span className="text-[12px]" style={{ color: 'var(--w-muted)' }}>
                 Only <b>phone</b> is required. name, email, company, country, city and tag are optional.
+              </span>
+              <span className="text-[11.5px]" style={{ color: 'var(--w-muted)' }}>
+                A <b>tag</b> column is applied per row and created if it does not exist yet. Separate
+                several with a comma: <code style={{ fontFamily: "'JetBrains Mono', monospace" }}>VIP;Madrid</code>
               </span>
               <input
                 type="file"

@@ -8,6 +8,28 @@ export const maxDuration = 60
 
 type Row = Record<string, string>
 
+/** A mis-mapped column would otherwise mint one tag per row. */
+const MAX_NEW_TAGS = 200
+
+/**
+ * Tag names for one row.
+ *
+ * Every column mapped to "tag" is read, not just the first, and a cell may
+ * hold several names separated by a comma, semicolon or pipe — "VIP, Madrid"
+ * is two tags, which is what anyone writing it meant. Duplicates within a row
+ * collapse case-insensitively.
+ */
+export function rowTagNames(row: Row, tagColumns: string[]): string[] {
+  const seen = new Map<string, string>()
+  for (const column of tagColumns) {
+    for (const part of (row[column] ?? '').split(/[,;|]/)) {
+      const name = part.trim()
+      if (name && !seen.has(name.toLowerCase())) seen.set(name.toLowerCase(), name)
+    }
+  }
+  return [...seen.values()]
+}
+
 /**
  * CSV import.
  *
@@ -53,6 +75,10 @@ export async function POST(request: Request) {
 
     // Tag names in the CSV are resolved once, not per row.
     const tagCache = new Map<string, string>()
+    const tagColumns = Object.entries(mapping)
+      .filter(([, field]) => field === 'tag')
+      .map(([column]) => column)
+    let tagOverflow = false
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
@@ -98,35 +124,45 @@ export async function POST(request: Request) {
       /* ---- tags: the dialog's "tag all" plus any per-row tag column ---- */
       const tagIds = [...(body.tag_ids ?? [])]
 
-      const tagColumn = Object.entries(mapping).find(([, field]) => field === 'tag')?.[0]
-      const rowTag = tagColumn ? (row[tagColumn] ?? '').trim() : ''
+      for (const name of rowTagNames(row, tagColumns)) {
+        const key = name.toLowerCase()
 
-      if (rowTag) {
-        const key = rowTag.toLowerCase()
         if (!tagCache.has(key)) {
+          // A cap, because a column mapped to "tag" by mistake — an order id,
+          // a timestamp — would otherwise mint one tag per row. Better to
+          // import the contacts and report the truncation than to bury the
+          // real tags under 20,000 junk ones.
+          if (tagCache.size >= MAX_NEW_TAGS) {
+            tagOverflow = true
+            break
+          }
+
+          // Not maybeSingle(): (user_id, name) is case-SENSITIVE unique, so
+          // "vip" and "VIP" can both exist and an ilike would match two rows.
           const { data: existing } = await supabase
             .from('tags')
             .select('id')
             .eq('user_id', userId)
-            .ilike('name', rowTag)
-            .maybeSingle()
+            .ilike('name', name)
+            .limit(1)
 
-          if (existing) {
-            tagCache.set(key, existing.id)
+          if (existing?.length) {
+            tagCache.set(key, existing[0].id)
           } else {
             const { data: createdTag } = await supabase
               .from('tags')
-              .insert({ user_id: userId, name: rowTag })
+              .insert({ user_id: userId, name })
               .select('id')
               .single()
             if (createdTag) tagCache.set(key, createdTag.id)
           }
         }
+
         const id = tagCache.get(key)
         if (id) tagIds.push(id)
       }
 
-      for (const tagId of tagIds) {
+      for (const tagId of new Set(tagIds)) {
         await supabase
           .from('contact_tags')
           .upsert({ user_id: userId, contact_id: contact.id, tag_id: tagId }, { onConflict: 'contact_id,tag_id' })
@@ -147,6 +183,19 @@ export async function POST(request: Request) {
         .eq('id', job.id)
     }
 
-    return { ok: true, created, merged, skipped, errors, total: rows.length }
+    return {
+      ok: true,
+      created,
+      merged,
+      skipped,
+      errors,
+      total: rows.length,
+      tagsCreated: tagCache.size,
+      // Never let a cap look like success — say it out loud.
+      tagWarning: tagOverflow
+        ? `Stopped after ${MAX_NEW_TAGS} distinct tags. Later rows were imported without their tag — ` +
+          'check that the column you mapped to "Tag" really holds tag names.'
+        : null,
+    }
   })
 }
