@@ -14,6 +14,12 @@ import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
+import {
+  countVariables,
+  templateShape,
+  paramMismatch,
+  explainMetaError,
+} from '@/lib/whatsapp/template-params'
 
 /* ------------------------------------------------------------------ */
 /* Phone rules — the dedupe path everything else depends on            */
@@ -903,6 +909,70 @@ describe('Shopify scopes', () => {
     const { SHOPIFY_SCOPES } = await import('@/lib/shopify/admin')
     expect(SHOPIFY_SCOPES).toContain('write_discounts')
     expect(SHOPIFY_SCOPES).toContain('write_orders') // COD tagging
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Template parameters — Meta #132012                                  */
+/* ------------------------------------------------------------------ */
+
+describe('template parameters', () => {
+  const body = (text: string) => [{ type: 'BODY', text }]
+
+  it('counts by the highest {{n}}, not by how many times one appears', () => {
+    expect(countVariables('Hi {{1}}, your order {{2}} ships today')).toBe(2)
+    expect(countVariables('Hi {{1}}, bye {{1}}')).toBe(1)
+    expect(countVariables('{{ 3 }} spaced')).toBe(3) // Meta tolerates the spaces
+    expect(countVariables('no variables here')).toBe(0)
+    expect(countVariables(null)).toBe(0)
+  })
+
+  it('reads header, body and dynamic buttons out of Meta components', () => {
+    const shape = templateShape([
+      { type: 'HEADER', format: 'TEXT', text: 'Order {{1}}' },
+      { type: 'BODY', text: 'Hi {{1}}, total {{2}}' },
+      { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Yes' }, { type: 'URL', text: 'Pay', url: 'https://x.com/{{1}}' }] },
+    ])
+    expect(shape).toEqual({ headerFormat: 'TEXT', headerVars: 1, bodyVars: 2, dynamicUrlButtons: [1] })
+  })
+
+  it('accepts a template whose parameters line up', () => {
+    const shape = templateShape(body('Hi {{1}}'))
+    expect(paramMismatch(shape, ['Ana'])).toBeNull()
+    expect(paramMismatch(templateShape(body('No variables')), [])).toBeNull()
+  })
+
+  it('rejects a blank value — the reported failure', () => {
+    // The broadcast wizard let you click past the Personalize step without
+    // filling anything, so every recipient came back #132012.
+    const shape = templateShape(body('Hi {{1}}, your code is {{2}}'))
+    expect(paramMismatch(shape, ['Ana', '  '])).toMatch(/\{\{2\}\} is empty/)
+  })
+
+  it('rejects the wrong number of values', () => {
+    expect(paramMismatch(templateShape(body('Hi {{1}}')), [])).toMatch(/expects 1 variable.*0 (was|were)/)
+    expect(paramMismatch(templateShape(body('Hi')), ['x'])).toMatch(/expects 0 variables/)
+  })
+
+  it('refuses a header or button the sender cannot fill', () => {
+    // Only body parameters are sent, so a template needing more than that can
+    // never succeed — say so instead of letting Meta reject each recipient.
+    const headerVar = templateShape([{ type: 'HEADER', format: 'TEXT', text: 'Hi {{1}}' }, ...body('x')])
+    expect(paramMismatch(headerVar, [])).toMatch(/header/i)
+
+    const image = templateShape([{ type: 'HEADER', format: 'IMAGE' }, ...body('x')])
+    expect(paramMismatch(image, [])).toMatch(/image header/i)
+
+    const dynamic = templateShape([...body('x'), { type: 'BUTTONS', buttons: [{ type: 'URL', url: 'https://x.com/{{1}}' }] }])
+    expect(paramMismatch(dynamic, [])).toMatch(/dynamic URL/i)
+  })
+
+  it('translates the Meta codes that otherwise send people in circles', () => {
+    const raw = '(#132012) Parameter format does not match format in the created template'
+    expect(explainMetaError(raw, 132012)).toContain('missing or blank value')
+    expect(explainMetaError(raw, '132012')).toContain('missing or blank value') // code arrives as either
+    expect(explainMetaError('boom', 999999)).toBe('boom') // unknown codes pass through untouched
+    expect(explainMetaError(explainMetaError(raw, 132012), 132012)).toBe(explainMetaError(raw, 132012)) // idempotent
   })
 })
 

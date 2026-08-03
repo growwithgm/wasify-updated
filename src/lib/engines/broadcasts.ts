@@ -2,6 +2,7 @@ import { sendWhatsApp, resolveApprovedTemplate } from '@/lib/whatsapp/send'
 import { phonesMatch, sanitizePhone } from '@/lib/phone'
 import { evaluateSegment } from './segments'
 import { logActivity, notify } from '@/lib/contacts'
+import { templateShape, paramMismatch, explainMetaError } from '@/lib/whatsapp/template-params'
 
 /**
  * Broadcast sender.
@@ -151,11 +152,58 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
   }
 
   const bindings: VariableBinding[] = broadcast.variable_map?.body ?? []
+  const shape = templateShape(tpl.components)
+
+  // A shape mismatch is the same for every recipient, so check it against the
+  // template ONCE. Without this the run marches through the whole audience
+  // collecting an identical #132012 per person.
+  const structural = paramMismatch(shape, Array(bindings.length).fill('x'))
+  if (structural) {
+    await db
+      .from('broadcasts')
+      .update({ status: 'failed', completed_at: new Date().toISOString() })
+      .eq('id', broadcast.id)
+    await db
+      .from('broadcast_recipients')
+      .update({ status: 'failed', error_message: structural, error_code: '132012' })
+      .eq('broadcast_id', broadcast.id)
+      .eq('status', 'queued')
+    await notify(db, userId, 'error', `Broadcast "${broadcast.name}" failed: ${structural}`, '/broadcasts')
+    return 0
+  }
 
   for (const recipient of queued) {
+    // Consent is re-read here, not just when the audience was built. A large
+    // broadcast drains over many cron passes, and someone who replies STOP
+    // mid-run must not receive the rest of it.
+    if (recipient.contact_id && (await hasOptedOut(db, userId, recipient.contact_id, recipient.phone))) {
+      await db
+        .from('broadcast_recipients')
+        .update({ status: 'skipped', error_message: 'Contact opted out of marketing' })
+        .eq('id', recipient.id)
+      continue
+    }
+
     const vars = recipient.contact_id
       ? await resolveVariables(db, userId, recipient.contact_id, bindings)
       : bindings.map((b) => (b.kind === 'static' ? b.value : ''))
+
+    // Per-recipient values can still come back blank — a contact_field binding
+    // on someone with no first name, say. Meta rejects a blank parameter, so
+    // skip that person rather than burning a send that cannot succeed.
+    const perRecipient = paramMismatch(shape, vars)
+    if (perRecipient) {
+      await db
+        .from('broadcast_recipients')
+        .update({
+          status: 'failed',
+          error_message: perRecipient,
+          error_code: '132012',
+          failed_at: new Date().toISOString(),
+        })
+        .eq('id', recipient.id)
+      continue
+    }
 
     const res = await sendWhatsApp(userId, recipient.phone, {
       kind: 'template',
@@ -173,7 +221,7 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
           ? { status: 'sent', message_id: res.wamid, sent_at: new Date().toISOString() }
           : {
               status: 'failed',
-              error_message: res.error,
+              error_message: explainMetaError(res.error, res.code),
               error_code: res.code ?? null,
               failed_at: new Date().toISOString(),
             }
@@ -182,6 +230,19 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
   }
 
   return queued.length
+}
+
+/** Consent as of right now — contact flag or suppression list. */
+async function hasOptedOut(db: any, userId: string, contactId: string, phone: string): Promise<boolean> {
+  const { data: contact } = await db
+    .from('contacts')
+    .select('opt_in_status')
+    .eq('id', contactId)
+    .maybeSingle()
+  if (contact?.opt_in_status === 'opted_out') return true
+
+  const { data: suppressed } = await db.from('suppression_list').select('phone').eq('user_id', userId)
+  return (suppressed ?? []).some((s: any) => phonesMatch(s.phone, phone))
 }
 
 /** Called by the cron tick: start scheduled broadcasts and drain sending ones. */

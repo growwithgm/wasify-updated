@@ -294,7 +294,11 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   }
 
   const STEPS = ['Choose template', 'Select audience', 'Personalize', 'Schedule']
-  const canNext = [!!template, !!estimate?.sendable, true, !!name.trim()][step]
+
+  // Every variable must have a value. A blank one is not "no personalisation":
+  // Meta rejects the send outright with #132012, once per recipient.
+  const unfilled = bindings.findIndex((b) => !String(b.value ?? '').trim())
+  const canNext = [!!template, !!estimate?.sendable, unfilled < 0, !!name.trim()][step]
 
   return (
     <Modal
@@ -469,7 +473,17 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
               This template has no variables — nothing to personalise.
             </div>
           ) : (
-            bindings.map((b, i) => (
+            <>
+            {unfilled >= 0 && (
+              <div
+                className="mb-3 rounded-lg px-3 py-2 text-[12.5px]"
+                style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+              >
+                {`{{${unfilled + 1}}}`} still needs a value. WhatsApp rejects a message with a blank
+                variable — every recipient would fail with error #132012.
+              </div>
+            )}
+            {bindings.map((b, i) => (
               <div key={i} className="mb-2.5 flex flex-wrap items-center gap-2">
                 <span
                   className="rounded px-1.5 py-0.5 text-[12px] font-bold"
@@ -517,7 +531,8 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                   </select>
                 )}
               </div>
-            ))
+            ))}
+            </>
           )}
 
           <div className="mt-3 text-[12.5px] font-medium">Preview</div>
