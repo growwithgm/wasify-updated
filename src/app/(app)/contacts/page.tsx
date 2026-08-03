@@ -89,6 +89,38 @@ function ContactsScreen() {
     return () => clearTimeout(t)
   }, [searchInput])
 
+  /**
+   * Tags are created here, on demand. Nothing else in the app creates one, so
+   * without this the tag dropdowns are a dead end on a new account: they hold
+   * only the placeholder, and clicking does nothing.
+   */
+  async function createTag(): Promise<string | null> {
+    const name = prompt('Name for the new tag')?.trim()
+    if (!name) return null
+
+    // The unique constraint is (user_id, name) and case-SENSITIVE, so "vip"
+    // and "VIP" would both be accepted as separate tags. Reuse the existing
+    // one instead — two tags that read the same are never what was meant.
+    const existing = tags.find((t) => t.name.toLowerCase() === name.toLowerCase())
+    if (existing) return existing.id
+
+    const res = await fetch('/api/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast(json.error ?? 'Could not create the tag', 'red')
+      return null
+    }
+    // POST returns the raw row; GET adds a usage count. Normalise so the two
+    // shapes stay interchangeable in state.
+    const tag = { id: json.tag.id, name: json.tag.name, color: json.tag.color, count: 0 }
+    setTags((prev) => [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)))
+    return tag.id as string
+  }
+
   async function bulk(action: string, tag?: string) {
     const ids = [...selected]
     if (!ids.length) return
@@ -222,17 +254,24 @@ function ContactsScreen() {
               {selected.size} selected
             </span>
             <select
-              onChange={(e) => e.target.value && bulk('tag', e.target.value)}
-              defaultValue=""
+              value=""
+              onChange={async (e) => {
+                const choice = e.target.value
+                e.target.value = '' // a <select> that acts as a menu must not stay on its pick
+                if (!choice) return
+                const tagId = choice === '__new' ? await createTag() : choice
+                if (tagId) bulk('tag', tagId)
+              }}
               className="cursor-pointer rounded-lg border px-2 py-1 text-[12.5px]"
               style={{ background: '#fff', borderColor: '#BBF7D0' }}
             >
-              <option value="">Add tag…</option>
+              <option value="">{tags.length ? 'Add tag…' : 'Add tag… (none yet)'}</option>
               {tags.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
               ))}
+              <option value="__new">+ Create a new tag…</option>
             </select>
             <Button size="sm" onClick={() => bulk('opt_out')}>
               Mark opted out
