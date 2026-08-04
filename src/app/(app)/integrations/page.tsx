@@ -848,6 +848,8 @@ function FeatureModal({
   const [discounts, setDiscounts] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  /** Reminders whose optional second-language picker has been revealed. */
+  const [secondLang, setSecondLang] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     if (kind === 'recovery') {
@@ -1079,10 +1081,28 @@ function FeatureModal({
               style={{ background: 'var(--w-card2)', borderColor: 'var(--w-border)' }}
             >
               <div className="mb-2 text-[12.5px] font-semibold">Reminder {n}</div>
-              <div className="grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                <TemplateSelect field={`recovery_r${n}_template_es`} label="Spanish template" />
-                <TemplateSelect field={`recovery_r${n}_template_en`} label="English template" />
-              </div>
+
+              {/* One template is the normal case. The second language stays
+                  available for stores that need it, but does not clutter the
+                  form until it is asked for. */}
+              <TemplateSelect field={`recovery_r${n}_template_en`} label="Template" />
+
+              {form[`recovery_r${n}_template_es`] || secondLang.has(n) ? (
+                <div className="mt-2.5">
+                  <TemplateSelect
+                    field={`recovery_r${n}_template_es`}
+                    label="Spanish template (used when the customer's locale is Spanish)"
+                  />
+                </div>
+              ) : (
+                <button
+                  onClick={() => setSecondLang((p) => new Set(p).add(n))}
+                  className="mt-1.5 cursor-pointer text-[12px] font-medium"
+                  style={{ color: '#16A34A', background: 'none', border: 0, padding: 0 }}
+                >
+                  + Add a Spanish version
+                </button>
+              )}
               <VarMap field={`recovery_r${n}_var_map`} vars={CART_VARS} />
               <div className="mt-2">
                 <Select

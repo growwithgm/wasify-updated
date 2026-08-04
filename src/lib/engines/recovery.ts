@@ -1,4 +1,5 @@
-import { sendTemplate } from '@/lib/whatsapp/send'
+import { sendTemplate, resolveApprovedTemplate } from '@/lib/whatsapp/send'
+import { templateShape, paramMismatch } from '@/lib/whatsapp/template-params'
 import { getShopifyConfig } from '@/lib/shopify/admin'
 import { generateDiscountCodeForContact } from './discounts'
 import { matchesKeyword, type InboundCtx } from './types'
@@ -196,7 +197,10 @@ async function sendReminder(
   const templateName = prefersSpanish ? es || en : en || es
   if (!templateName) return { ok: false, error: `No template set for reminder ${stage}` }
 
-  const language = templateName === es ? 'es' : 'en'
+  // The CUSTOMER's preference, not a guess from which field held the name.
+  // resolveApprovedTemplate() matches it exactly, then loosely, then falls
+  // back — so a single template configured for everyone still resolves.
+  const language = prefersSpanish ? 'es' : 'en'
 
   /* ---------------------- optional discount --------------------- */
   let discountCode: string | undefined
@@ -236,17 +240,30 @@ async function sendReminder(
   /* --------------------- dynamic URL button --------------------- */
   // Meta only substitutes a SUFFIX: the template's button base URL is
   // https://<store-domain>/{{1}} and we pass path+query only.
+  //
+  // Whether to send that parameter is decided by the TEMPLATE, not by whether
+  // we happen to have a link. A static button takes no parameter, and sending
+  // one anyway is rejected for every recipient with #132012.
+  const tpl = await resolveApprovedTemplate(userId, templateName, language)
+  if (!tpl) return { ok: false, error: `Template "${templateName}" is not synced or not Approved` }
+
+  const shape = templateShape(tpl.components)
+  const suffix = urlSuffix(checkout.abandoned_checkout_url, discountCode)
+  const wantsSuffix = shape.dynamicUrlButtons.length > 0
+
+  const mismatch = paramMismatch(shape, vars, { urlSuffixes: wantsSuffix && suffix ? 1 : 0 })
+  if (mismatch) return { ok: false, error: `Reminder ${stage} template "${templateName}": ${mismatch}` }
+
   const components: any[] = []
   if (vars.length) {
     components.push({ type: 'body', parameters: vars.map((t) => ({ type: 'text', text: t })) })
   }
 
-  const suffix = urlSuffix(checkout.abandoned_checkout_url, discountCode)
-  if (suffix) {
+  if (wantsSuffix && suffix) {
     components.push({
       type: 'button',
       sub_type: 'url',
-      index: '0',
+      index: String(shape.dynamicUrlButtons[0]),
       parameters: [{ type: 'text', text: suffix }],
     })
   }

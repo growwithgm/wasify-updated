@@ -443,6 +443,33 @@ Webhooks are registered automatically on the way back. Then:
 
 Both stay off until you enable them, so nothing is sent by accident.
 
+### Building the cart-recovery template in Meta
+
+One rule matters more than the rest: **the button URL type must be `Dynamic`,
+not `Static`.**
+
+| Field | Value | Why |
+|---|---|---|
+| Type of variable | `Number` | Positional `{{1}}` — what Wasify sends |
+| Body | `Hi *{{1}}*, …` | Map `{{1}}` to *First name* in Wasify |
+| Variable sample | a real first name, e.g. `Ana` | Meta reviews the sample; `Dear` reads as "Hi *Dear*" |
+| Footer | include `Reply STOP to opt out` | Matches the STOP keywords Wasify honours |
+| Button → URL type | **`Dynamic`** | Meta substitutes a **suffix** onto the base URL |
+| Button → Website URL | `https://your-store.com/{{1}}` | Wasify appends the checkout path and query |
+| Button → URL sample | `cart/c/abc123?key=xyz` | Any plausible path |
+
+A `Static` button pointing at your home page fails twice over: Meta rejects the
+send with **#132012** (a static button accepts no parameter), and even if it
+went through, the customer would land on the home page with an **empty cart** —
+which is the entire point of the reminder.
+
+Wasify reads the shape of the approved template before sending, so a static
+button is reported as a configuration error rather than a wall of failures.
+
+Each reminder needs **one** template. The Spanish field is optional — add it
+only if you serve Spanish-speaking customers, and Wasify picks it by the
+customer's locale.
+
 ---
 
 ## Troubleshooting
@@ -463,6 +490,8 @@ Both stay off until you enable them, so nothing is sent by accident.
 | Webhooks say **Not registered** but some clearly work | Fixed: one rejected topic used to abort the whole loop. The card now says how many of the eight registered and names the ones that did not. |
 | Scopes list looks short — no `read_orders` or `read_discounts` | Expected. Shopify collapses an implied read scope into its write counterpart, so `write_orders` covers `read_orders` and `write_discounts` covers `read_discounts`. |
 | Shopify connects, but no orders or carts arrive | A webhook could not be registered because its scope was missing. Check Step 4c — `checkouts/*` needs `read_orders`, `fulfillments/*` needs `read_fulfillments`. Then Release the version and **Reconnect**. |
+| Cart reminders fail with *#132012* | Usually the template's button is **Static**. Cart recovery needs a **Dynamic** URL button — Meta substitutes only a suffix onto the base URL. See Step 8. Also check every `{{n}}` is mapped to a value. |
+| Cart reminder link goes to the home page, cart empty | Same cause: a static button URL. The customer's checkout link is passed as the button's suffix, which only a dynamic button accepts. |
 | Cart reminders send with no discount code | `write_discounts` was not granted. Release the version, then Integrations → Shopify → Reconnect. |
 | Shopify admin shows the app in a frame and login loops | **Embed app in Shopify admin** is ticked. Untick it — this app is not embedded, and its cookies are blocked inside that iframe. |
 | Cron returns `401` | Usually the wrong header for the variable you set: `CRON_SECRET` needs `Authorization: Bearer <secret>`, `AUTOMATION_CRON_SECRET` needs `x-cron-secret: <secret>`. The `401` body names the right one. |

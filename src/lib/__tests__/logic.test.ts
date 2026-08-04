@@ -995,6 +995,27 @@ describe('template parameters', () => {
     expect(paramMismatch(dynamic, [])).toMatch(/dynamic URL/i)
   })
 
+  it('decides the cart-link button from the template, not from having a link', () => {
+    // The recovery reminder always pushed a URL parameter when it had a cart
+    // link. A template whose button is STATIC accepts none, so every send was
+    // rejected #132012 — and a static button drops the customer on the home
+    // page with an empty cart, which defeats the reminder anyway.
+    const staticButton = templateShape([
+      { type: 'BODY', text: 'Hi {{1}}' },
+      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Complete my order', url: 'https://ibban.com/' }] },
+    ])
+    expect(staticButton.dynamicUrlButtons).toEqual([])
+    expect(paramMismatch(staticButton, ['Ana'], { urlSuffixes: 1 })).toMatch(/0 button\(s\) with a dynamic URL/)
+    expect(paramMismatch(staticButton, ['Ana'], { urlSuffixes: 0 })).toBeNull()
+
+    const dynamicButton = templateShape([
+      { type: 'BODY', text: 'Hi {{1}}' },
+      { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Complete my order', url: 'https://ibban.com/{{1}}' }] },
+    ])
+    expect(dynamicButton.dynamicUrlButtons).toEqual([0])
+    expect(paramMismatch(dynamicButton, ['Ana'], { urlSuffixes: 1 })).toBeNull()
+  })
+
   it('translates the Meta codes that otherwise send people in circles', () => {
     const raw = '(#132012) Parameter format does not match format in the created template'
     expect(explainMetaError(raw, 132012)).toContain('missing or blank value')
