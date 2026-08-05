@@ -7,6 +7,7 @@ import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { siteUrlStatus } from '@/lib/site-url'
 import { flowAuthOk, makeCode, toMetaPhone, formatOrderTotal } from '@/lib/flow/order-confirmation'
 import { numericId } from '@/lib/shopify/sync'
+import { urlSuffix } from '@/lib/engines/recovery'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
   // Tenant routing by store domain — the same key the webhook uses.
   const { data: config } = await db
     .from('shopify_config')
-    .select('user_id, orderconf_enabled, orderconf_template, orderconf_language')
+    .select('user_id, orderconf_enabled, orderconf_template, orderconf_language, orderconf_track_clicks')
     .eq('store_domain', shop)
     .maybeSingle()
 
@@ -114,8 +115,21 @@ export async function POST(request: Request) {
   const firstName = (body.first_name ?? '').trim() || 'cliente'
   const vars = [firstName, body.order_name ?? `#${orderId}`, formatOrderTotal(body.total, body.currency)]
 
+  // Two button modes, the merchant's choice:
+  //   track_clicks ON  -> suffix is the short code; template base is
+  //                       <app>/o/{{1}} and the click is recorded on the way
+  //                       through an invisible 302 to the status page.
+  //   track_clicks OFF -> suffix is the status page's own path+query; template
+  //                       base is https://<store domain>/{{1}} and this app is
+  //                       not in the customer's path at all.
+  // Either way the order_links row stays — it is the (shop, order_id) dedupe.
+  const trackClicks = config.orderconf_track_clicks ?? true
+  const buttonParam = trackClicks ? code : urlSuffix(body.status_url)
+
   const shape = templateShape(tpl.components)
-  const mismatch = paramMismatch(shape, vars, { urlSuffixes: shape.dynamicUrlButtons.length ? 1 : 0 })
+  const mismatch = paramMismatch(shape, vars, {
+    urlSuffixes: shape.dynamicUrlButtons.length && buttonParam ? 1 : 0,
+  })
   if (mismatch) {
     return NextResponse.json({ skipped: 'template_mismatch', error: mismatch })
   }
@@ -123,12 +137,12 @@ export async function POST(request: Request) {
   const components: any[] = [
     { type: 'body', parameters: vars.map((t) => ({ type: 'text' as const, text: t })) },
   ]
-  if (shape.dynamicUrlButtons.length) {
+  if (shape.dynamicUrlButtons.length && buttonParam) {
     components.push({
       type: 'button',
       sub_type: 'url',
       index: String(shape.dynamicUrlButtons[0]),
-      parameters: [{ type: 'text', text: code }],
+      parameters: [{ type: 'text', text: buttonParam }],
     })
   }
 

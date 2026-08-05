@@ -485,8 +485,14 @@ fired by Shopify Flow rather than a webhook.
 
 1. **Vercel** → add `FLOW_SECRET` (`openssl rand -hex 24`), redeploy.
 2. **Meta** → create a template with three body variables ({{1}} first name,
-   {{2}} order number, {{3}} total) and a **Dynamic URL** button whose base is
-   `https://YOUR-APP.vercel.app/o/{{1}}`. Default name: `order_confirmation_es`.
+   {{2}} order number, {{3}} total) and a **Dynamic URL** button. The button's
+   base URL depends on the **Track button clicks** choice in step 3 — the
+   customer lands on their order-status page either way:
+
+   | Track clicks | Button base URL | Path of the tap |
+   |---|---|---|
+   | ✅ on | `https://YOUR-APP.vercel.app/o/{{1}}` | invisible 302 through the app (click recorded) → order page |
+   | ☐ off | `https://YOUR-STORE.com/{{1}}` (the domain your order pages live on) | straight to the order page — the app is never in the path |
 3. **Wasify** → Integrations → **Order confirmation (Shopify Flow)** →
    Configure → enable it and pick the template.
 4. **Shopify admin** → **Flow → Create workflow**:

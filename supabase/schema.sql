@@ -1455,6 +1455,9 @@ alter table public.order_links enable row level security;
 alter table public.shopify_config add column if not exists orderconf_enabled boolean not null default false;
 alter table public.shopify_config add column if not exists orderconf_template text not null default 'order_confirmation_es';
 alter table public.shopify_config add column if not exists orderconf_language text not null default 'es';
+-- true  -> button carries a short /o/<code> link (invisible redirect, click tracked)
+-- false -> button carries the order-status path directly on the store's domain
+alter table public.shopify_config add column if not exists orderconf_track_clicks boolean not null default true;
 
 -- audit_log is service-role only: RLS on, and no policy at all means
 -- authenticated clients can never read or write it.

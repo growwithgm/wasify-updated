@@ -1218,12 +1218,40 @@ function FeatureModal({
           <TemplateSelect field="orderconf_template" label="Template" />
           <div className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
             The template must have <b>three body variables</b> — {'{{1}}'} first name, {'{{2}}'} order
-            number, {'{{3}}'} total — and a <b>Dynamic URL button</b> whose base URL is{' '}
-            <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
-              {typeof window !== 'undefined' ? window.location.origin : ''}/o/{'{{1}}'}
-            </code>{' '}
-            — <b>this app&apos;s domain</b>, not your store&apos;s. The button carries a short tracking
-            code that only exists here; pointed at the store it lands on a 404.
+            number, {'{{3}}'} total — and a <b>Dynamic URL button</b>.
+          </div>
+
+          <label className="mt-4 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={form.orderconf_track_clicks ?? true}
+              onChange={(e) => set('orderconf_track_clicks', e.target.checked)}
+              className="mt-0.5 h-4 w-4 cursor-pointer"
+              style={{ accentColor: '#16A34A' }}
+            />
+            <span className="text-[12.5px] leading-relaxed">
+              <b>Track button clicks.</b> The customer still lands on your store&apos;s order page either
+              way — this only decides whether the tap passes through an invisible redirect that records
+              it, so Analytics can show how many customers opened their tracking link.
+            </span>
+          </label>
+
+          <div
+            className="mt-3 rounded-lg px-3 py-2 text-[12px] leading-relaxed"
+            style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+          >
+            The button&apos;s <b>base URL in the Meta template</b> must match this choice:
+            <code
+              className="mt-1 block"
+              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}
+            >
+              {(form.orderconf_track_clicks ?? true)
+                ? `${typeof window !== 'undefined' ? window.location.origin : ''}/o/{{1}}`
+                : 'https://YOUR-STORE-DOMAIN.com/{{1}}'}
+            </code>
+            {(form.orderconf_track_clicks ?? true)
+              ? 'With tracking on, the code in the button only resolves on this app.'
+              : 'With tracking off, the order-status path is passed straight to your store — this app never appears in the customer’s path.'}
           </div>
 
           <div
