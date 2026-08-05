@@ -1244,10 +1244,14 @@ describe('shopify graphql backfill', () => {
     expect(sync.match(/reverse: true/g)?.length).toBe(3) // orders, checkouts, products
     expect(sync).toContain('changedNodes')
 
-    // The carts page must sort by when the cart was ABANDONED — insert order
-    // put three-week-old backfill rows above this afternoon's carts.
-    const carts = readFileSync(join(process.cwd(), 'src/app/api/carts/route.ts'), 'utf8')
-    expect(carts).toMatch(/order\('abandoned_at'/)
+    // Every checkout list must sort by when the cart was ABANDONED — insert
+    // order put three-week-old backfill rows above this afternoon's carts,
+    // first on the carts page, then again in the recovery test picker.
+    for (const file of ['src/app/api/carts/route.ts', 'src/app/api/recovery/test/route.ts']) {
+      expect(readFileSync(join(process.cwd(), file), 'utf8'), `${file} sorts by insert time`).toMatch(
+        /order\('abandoned_at'/
+      )
+    }
   })
 
   it('reshapes an abandoned checkout, keeping the recovery link and locale', () => {

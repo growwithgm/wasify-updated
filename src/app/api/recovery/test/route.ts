@@ -32,8 +32,12 @@ export async function GET() {
     const { data: checkouts } = await supabase
       .from('shopify_checkouts')
       .select(
-        'id, shopify_checkout_id, customer_name, customer_phone, customer_locale, total_price, currency, items_count, completed_at, recovered, abandoned_checkout_url, created_at'
+        'id, shopify_checkout_id, customer_name, customer_phone, customer_locale, total_price, currency, items_count, completed_at, recovered, abandoned_checkout_url, abandoned_at, created_at'
       )
+      // When the cart was ABANDONED, not when its row was inserted — a
+      // backfill writes weeks-old carts seconds ago, and insert-order put
+      // those above the ones the merchant actually wants to test against.
+      .order('abandoned_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(25)
 
@@ -59,7 +63,8 @@ export async function GET() {
           total: c.total_price,
           currency: c.currency,
           items: c.items_count,
-          createdAt: c.created_at,
+          // The age shown must be the cart's, not the mirror row's.
+          createdAt: c.abandoned_at ?? c.created_at,
           hasCartLink: !!c.abandoned_checkout_url,
           recoveryStatus: row?.status ?? null,
           remindersSent: row?.reminders_sent ?? 0,
