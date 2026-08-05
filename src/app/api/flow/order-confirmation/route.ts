@@ -66,8 +66,17 @@ export async function POST(request: Request) {
   // variable the workflow happened to use.
   const orderId = body.order_id != null ? numericId(String(body.order_id)) : ''
   const shop = normalizeShopDomain(body.shop ?? '')
-  if (!orderId || !shop || !body.status_url) {
-    return NextResponse.json({ error: 'order_id, shop and status_url are required' }, { status: 400 })
+  if (!orderId || !shop) {
+    return NextResponse.json({ error: 'order_id and shop are required' }, { status: 400 })
+  }
+
+  // Not every order has a status page — a draft/POS order can come through
+  // with statusPageUrl empty. That is a fact about THIS order, not a
+  // configuration error: 200-skip it, or Flow retries something no retry can
+  // change. (The button needs this URL in both modes — as the redirect target
+  // or as the suffix itself.)
+  if (!body.status_url) {
+    return NextResponse.json({ skipped: 'no_status_url' })
   }
 
   const db = createServiceClient()
