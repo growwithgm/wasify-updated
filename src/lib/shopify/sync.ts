@@ -269,7 +269,7 @@ export async function syncStore(
   try {
     const { count, error } = await paginate(config, PRODUCTS_QUERY, 'products', {}, maxPages, async (node) => {
       const variant = node.variants?.nodes?.[0] ?? {}
-      await db.from('shopify_products').upsert(
+      const { error: writeError } = await db.from('shopify_products').upsert(
         {
           user_id: config.user_id,
           shopify_product_id: numericId(node.id),
@@ -288,6 +288,9 @@ export async function syncStore(
         },
         { onConflict: 'user_id,shopify_product_id' }
       )
+      // Unchecked, this loop reported "synced N products" while every single
+      // write failed — which is precisely how an empty catalog looked healthy.
+      if (writeError) throw new Error(writeError.message)
     })
     result.products = count
     if (error) result.errors.push(`products: ${error}`)
@@ -300,13 +303,17 @@ export async function syncStore(
     await refreshContactRollups(db, config.user_id, contactId)
   }
 
-  await db
+  const { error: statusError } = await db
     .from('shopify_config')
     .update({
       last_sync_at: new Date().toISOString(),
       last_sync_status: result.errors.length ? `partial: ${result.errors[0]}` : 'ok',
     })
     .eq('user_id', config.user_id)
+
+  // If even the bookkeeping write fails, "Last sync: never" while the toast
+  // claims success — say so instead.
+  if (statusError) result.errors.push(`recording sync status: ${statusError.message}`)
 
   return result
 }

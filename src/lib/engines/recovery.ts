@@ -565,13 +565,25 @@ export async function upsertCheckoutFromWebhook(
     shopify_updated_at: payload.updated_at ?? null,
   }
 
-  const { data } = await db
+  const { data, error } = await db
     .from('shopify_checkouts')
     .upsert(mergeWithStored(await storedCheckout(db, userId, shopifyCheckoutId), row), {
       onConflict: 'user_id,shopify_checkout_id',
     })
     .select('*')
     .single()
+
+  // Throw, never swallow: an ignored error here marked the webhook delivery
+  // "processed" while nothing was written, which is how an out-of-date
+  // database (missing columns → PGRST204) looked exactly like success.
+  if (error) {
+    throw new Error(
+      `Could not save checkout ${shopifyCheckoutId}: ${error.message}` +
+        (String(error.code) === 'PGRST204'
+          ? ' — the database is missing a column this version writes. Run supabase/schema.sql again (it is idempotent).'
+          : '')
+    )
+  }
 
   // Row creation is the deliberate exception to "backfill never triggers":
   // creating history is safe, and sending stays gated on recovery_enabled.

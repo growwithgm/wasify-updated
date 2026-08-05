@@ -450,11 +450,22 @@ export async function upsertOrderFromWebhook(
     shopify_created_at: payload.created_at ?? null,
   }
 
-  const { data } = await db
+  const { data, error } = await db
     .from('shopify_orders')
     .upsert(row, { onConflict: 'user_id,shopify_order_id' })
     .select('*')
     .single()
+
+  // Same rule as the checkout mirror: a swallowed write error reads as
+  // "processed" in the deliveries log while the order never lands.
+  if (error) {
+    throw new Error(
+      `Could not save order ${row.shopify_order_id}: ${error.message}` +
+        (String(error.code) === 'PGRST204'
+          ? ' — the database is missing a column this version writes. Run supabase/schema.sql again (it is idempotent).'
+          : '')
+    )
+  }
 
   if (contactId) await refreshContactRollups(db, userId, contactId)
 

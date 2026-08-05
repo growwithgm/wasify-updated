@@ -22,11 +22,46 @@ type Check = {
   breaks: string
 }
 
+/**
+ * Columns added after the first release, per table. The code writes them on
+ * every webhook/sync, so a database that predates them fails every write with
+ * PGRST204 — silently, from the UI's point of view. Probing them here turns
+ * "nothing shows up" into a named, fixable answer.
+ */
+const MIGRATION_PROBES: Array<{ table: string; columns: string }> = [
+  { table: 'shopify_checkouts', columns: 'abandoned_at, raw' },
+  { table: 'checkout_recoveries', columns: 'send_attempts, conversation_id' },
+]
+
+async function databaseStatus(): Promise<{ ok: boolean; message: string | null }> {
+  if (!serviceRoleStatus().ok) return { ok: false, message: 'Cannot check — Supabase variables are missing.' }
+  try {
+    const { createServiceClient } = await import('@/lib/supabase/server')
+    const db = createServiceClient()
+    for (const probe of MIGRATION_PROBES) {
+      const { error } = await db.from(probe.table).select(probe.columns).limit(1)
+      if (error) {
+        return {
+          ok: false,
+          message:
+            `Table "${probe.table}" is missing a column this version needs (${error.message}). ` +
+            'Run supabase/schema.sql in the Supabase SQL editor again — it is idempotent and will only add what is missing. ' +
+            'Until then, Shopify webhooks and syncs fail on every write.',
+        }
+      }
+    }
+    return { ok: true, message: null }
+  } catch (e: any) {
+    return { ok: false, message: `Could not reach the database: ${e?.message ?? e}` }
+  }
+}
+
 export async function GET() {
   const env = process.env
   const site = siteUrlStatus()
   const encryption = encryptionKeyStatus()
   const serviceRole = serviceRoleStatus()
+  const database = await databaseStatus()
 
   const checks: Check[] = [
     {
@@ -70,6 +105,12 @@ export async function GET() {
       ok: !!env.META_APP_SECRET,
       required: true,
       breaks: 'The WhatsApp webhook refuses all traffic (503) — no inbound messages arrive.',
+    },
+    {
+      key: 'DATABASE_SCHEMA',
+      ok: database.ok,
+      required: true,
+      breaks: database.ok ? '' : database.message!,
     },
     {
       // Either variable satisfies this — they differ only in which header

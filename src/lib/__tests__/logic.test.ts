@@ -501,6 +501,14 @@ describe('shop domain', () => {
 
 describe('health check', () => {
   async function health(env: Record<string, string | undefined>) {
+    // The route now probes the database for migration columns; unit tests
+    // answer that probe with an empty PostgREST result (columns exist).
+    // A fresh Response per call — a shared one is consumed by the first probe.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(
+        async () => new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+      )
     const saved = { ...process.env }
     // Clear every key the route inspects, then apply the case under test.
     for (const k of [
@@ -514,6 +522,7 @@ describe('health check', () => {
     const body = await (await GET()).json()
 
     process.env = saved
+    fetchSpy.mockRestore()
     return body
   }
 
