@@ -1,4 +1,4 @@
-import { adminRest } from './admin'
+import { adminGraphql } from './admin'
 
 /**
  * Webhook topics Wasify registers through the Admin API.
@@ -41,16 +41,8 @@ export async function registerShopifyWebhooks(
   const address = `${siteUrl.replace(/\/$/, '')}/api/shopify/webhook`
 
   // Reconnects re-run this, so read what already exists and skip duplicates.
-  const existing = await adminRest<{ webhooks: Array<{ id: number; topic: string; address: string }> }>(
-    domain,
-    token,
-    'webhooks.json',
-    { query: { limit: 250 } }
-  )
-
-  const already = new Set(
-    existing.ok ? existing.data.webhooks.filter((w) => w.address === address).map((w) => w.topic) : []
-  )
+  const existing = await listShopifyWebhooks(domain, token)
+  const already = new Set(existing.filter((w) => w.address === address).map((w) => w.topic))
 
   const results: WebhookResult[] = []
 
@@ -60,17 +52,28 @@ export async function registerShopifyWebhooks(
       continue
     }
 
-    const res = await adminRest(domain, token, 'webhooks.json', {
-      method: 'POST',
-      body: JSON.stringify({ webhook: { topic, address, format: 'json' } }),
-    })
+    const res = await adminGraphql<any>(
+      domain,
+      token,
+      `mutation Subscribe($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
+        webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) {
+          webhookSubscription { id }
+          userErrors { field message }
+        }
+      }`,
+      { topic: graphqlTopic(topic), sub: { callbackUrl: address, format: 'JSON' } }
+    )
+
+    const userErrors = res.ok ? (res.data?.webhookSubscriptionCreate?.userErrors ?? []) : []
+    const message = res.ok ? userErrors.map((e: any) => e.message).join('; ') : res.error
 
     // "address has already been taken" means the subscription exists, which is
     // the outcome we wanted. Treating it as an error made every re-register
     // look like a failure.
-    const alreadyExists = !res.ok && /already been taken|already exists/i.test(res.error ?? '')
+    const alreadyExists = /already been taken|already exists/i.test(message ?? '')
+    const ok = (res.ok && userErrors.length === 0) || alreadyExists
 
-    results.push({ topic, ok: res.ok || alreadyExists, error: res.ok || alreadyExists ? undefined : res.error })
+    results.push({ topic, ok, error: ok ? undefined : message })
   }
 
   // Deliberately NOT throwing on a partial failure. Registration is a loop of
@@ -79,12 +82,34 @@ export async function registerShopifyWebhooks(
   return { results, failed: results.filter((r) => !r.ok) }
 }
 
-export async function listShopifyWebhooks(domain: string, token: string) {
-  const res = await adminRest<{ webhooks: Array<{ id: number; topic: string; address: string; created_at: string }> }>(
+/** `orders/create` → `ORDERS_CREATE`, the GraphQL enum spelling. */
+export function graphqlTopic(topic: string): string {
+  return topic.replace(/[\/-]/g, '_').toUpperCase()
+}
+
+/** `ORDERS_CREATE` → `orders/create`, so callers keep speaking REST topics. */
+export function restTopic(topic: string): string {
+  const lower = String(topic).toLowerCase()
+  const cut = lower.lastIndexOf('_')
+  return cut < 0 ? lower : `${lower.slice(0, cut).replace(/_/g, '/')}/${lower.slice(cut + 1)}`
+}
+
+export async function listShopifyWebhooks(
+  domain: string,
+  token: string
+): Promise<Array<{ id: string; topic: string; address: string }>> {
+  const res = await adminGraphql<any>(
     domain,
     token,
-    'webhooks.json',
-    { query: { limit: 250 } }
+    `query { webhookSubscriptions(first: 100) { nodes {
+      id topic endpoint { __typename ... on WebhookHttpEndpoint { callbackUrl } }
+    } } }`
   )
-  return res.ok ? res.data.webhooks : []
+  if (!res.ok) return []
+
+  return (res.data?.webhookSubscriptions?.nodes ?? []).map((w: any) => ({
+    id: w.id,
+    topic: restTopic(w.topic),
+    address: w.endpoint?.callbackUrl ?? '',
+  }))
 }

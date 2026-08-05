@@ -48,9 +48,14 @@ function CatalogScreen() {
     try {
       const res = await fetch('/api/shopify/sync', { method: 'POST' })
       const json = await res.json()
+      // Never report a cheerful zero: if a resource failed, say which and why.
       toast(
-        res.ok ? `Synced ${json.products} products, ${json.orders} orders, ${json.checkouts} carts` : json.error,
-        res.ok ? 'green' : 'red'
+        !res.ok
+          ? json.error
+          : json.errors?.length
+            ? json.errors.join(' · ')
+            : `Synced ${json.products} products, ${json.orders} orders, ${json.checkouts} carts`,
+        res.ok && !json.errors?.length ? 'green' : 'red'
       )
       load()
     } finally {

@@ -204,23 +204,58 @@ export function nextPageUrl(link: string | null | undefined): string | null {
   return url ? url[1] : null
 }
 
-/** Tag an order — used by the COD flow to reflect confirmation state in Shopify. */
+/** `12345` → `gid://shopify/Order/12345`, passing an existing gid through. */
+export function orderGid(orderId: string | number): string {
+  const id = String(orderId)
+  return id.startsWith('gid://') ? id : `gid://shopify/Order/${id}`
+}
+
+/**
+ * Tag an order — the COD flow reflects confirmation state in Shopify with it.
+ *
+ * GraphQL, because REST is closed to apps created after 1 April 2025 and a
+ * REST failure here is invisible: the WhatsApp side of COD keeps working
+ * while the merchant's Shopify admin never shows "COD Confirmed".
+ */
 export async function setOrderTags(domain: string, token: string, orderId: string | number, tags: string[]) {
-  return adminRest(domain, token, `orders/${orderId}.json`, {
-    method: 'PUT',
-    body: JSON.stringify({ order: { id: orderId, tags: tags.join(', ') } }),
-  })
+  const current = await getOrderTags(domain, token, orderId)
+  const wanted = new Set(tags.map((t) => t.trim()).filter(Boolean))
+  const remove = current.filter((t) => !wanted.has(t))
+  const add = [...wanted].filter((t) => !current.includes(t))
+
+  if (remove.length) {
+    const res = await adminGraphql(
+      domain,
+      token,
+      `mutation Remove($id: ID!, $tags: [String!]!) {
+        tagsRemove(id: $id, tags: $tags) { userErrors { message } }
+      }`,
+      { id: orderGid(orderId), tags: remove }
+    )
+    if (!res.ok) return res
+  }
+
+  if (!add.length) return { ok: true as const, data: null }
+
+  return adminGraphql(
+    domain,
+    token,
+    `mutation Add($id: ID!, $tags: [String!]!) {
+      tagsAdd(id: $id, tags: $tags) { userErrors { message } }
+    }`,
+    { id: orderGid(orderId), tags: add }
+  )
 }
 
 export async function getOrderTags(domain: string, token: string, orderId: string | number): Promise<string[]> {
-  const res = await adminRest<{ order: { tags: string } }>(domain, token, `orders/${orderId}.json`, {
-    query: { fields: 'id,tags' },
-  })
-  if (!res.ok) return []
-  return (res.data.order?.tags ?? '')
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean)
+  const res = await adminGraphql<{ order: { tags: string[] } | null }>(
+    domain,
+    token,
+    `query Tags($id: ID!) { order(id: $id) { tags } }`,
+    { id: orderGid(orderId) }
+  )
+  if (!res.ok || !res.data.order) return []
+  return (res.data.order.tags ?? []).map((t) => String(t).trim()).filter(Boolean)
 }
 
 /** Replace any tag from `remove` with `add`, preserving everything else. */

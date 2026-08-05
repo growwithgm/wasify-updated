@@ -14,6 +14,8 @@ import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { rowTagNames } from '@/app/api/contacts/import/route'
 import { recoveryLabel } from '@/app/(app)/carts/page'
+import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
+import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -1131,7 +1133,90 @@ describe('template parameters', () => {
 /* Webhook registration                                                */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* GraphQL backfill                                                    */
+/*                                                                     */
+/* REST is closed to apps created after 1 April 2025, and the failure  */
+/* was silent and partial: orders arrived (webhook) while products and */
+/* abandoned carts stayed empty forever.                               */
+/* ------------------------------------------------------------------ */
+
+describe('shopify graphql backfill', () => {
+  it('uses GraphQL, never the legacy REST endpoints', async () => {
+    const sync = readFileSync(join(process.cwd(), 'src/lib/shopify/sync.ts'), 'utf8')
+    for (const endpoint of ['products.json', 'checkouts.json', 'orders.json', 'webhooks.json']) {
+      expect(sync, `${endpoint} is a REST endpoint this app may not call`).not.toContain(endpoint)
+    }
+    expect(sync).toContain('abandonedCheckouts')
+  })
+
+  it('strips the gid wrapper to the numeric id every table stores', () => {
+    expect(numericId('gid://shopify/Order/1234567890')).toBe('1234567890')
+    expect(numericId('gid://shopify/AbandonedCheckout/99?key=x')).toBe('99')
+    expect(numericId('4455')).toBe('4455')
+    expect(numericId(null)).toBe('')
+  })
+
+  it('reshapes an order into what the webhook mapper expects', () => {
+    // Reusing the webhook mapper is deliberate — it owns the phone chain and
+    // the source discipline, and a second mapper is how the paths drift.
+    const payload = orderNodeToPayload({
+      id: 'gid://shopify/Order/555',
+      name: '#1982',
+      createdAt: '2026-07-01T10:00:00Z',
+      displayFinancialStatus: 'PENDING',
+      paymentGatewayNames: ['Cash on Delivery (COD)'],
+      tags: ['COD Pending', 'vip'],
+      currentTotalPriceSet: { shopMoney: { amount: '86.90', currencyCode: 'EUR' } },
+      customer: { id: 'gid://shopify/Customer/77', firstName: 'María', lastName: 'García', phone: '+34600123456' },
+      shippingAddress: { name: 'María García', phone: '+34600123456', city: 'Valencia' },
+      lineItems: { nodes: [{ title: 'Blusa', quantity: 2, sku: 'B-1', originalUnitPriceSet: { shopMoney: { amount: '43.45' } } }] },
+    })
+
+    expect(payload.id).toBe('555')
+    expect(payload.financial_status).toBe('pending')
+    expect(payload.tags).toBe('COD Pending, vip') // the mapper expects a string
+    expect(payload.total_price).toBe('86.90')
+    expect(payload.customer.id).toBe('77')
+    expect(payload.line_items[0]).toMatchObject({ title: 'Blusa', quantity: 2, price: '43.45' })
+
+    // The COD engine must still recognise it through the shared helpers.
+    expect(isCodOrder(payload, ['cash on delivery', 'cod'])).toBe(true)
+    expect(extractShopifyPhone(payload)).toBe('34600123456')
+  })
+
+  it('reshapes an abandoned checkout, keeping the recovery link and locale', () => {
+    const payload = checkoutNodeToPayload({
+      id: 'gid://shopify/AbandonedCheckout/69328815489397',
+      createdAt: '2026-07-28T16:10:00Z',
+      completedAt: null,
+      abandonedCheckoutUrl: 'https://ibban.com/cart/c/abc?key=xyz',
+      totalPriceSet: { shopMoney: { amount: '64.95', currencyCode: 'EUR' } },
+      customer: { id: 'gid://shopify/Customer/9', firstName: 'Archna', lastName: 'Parbhoe', locale: 'es', phone: '+34600123456' },
+      lineItems: { nodes: [{ title: 'Vestido', quantity: 1 }] },
+    })
+
+    expect(payload.id).toBe('69328815489397')
+    expect(payload.completed_at).toBeNull()
+    expect(payload.abandoned_checkout_url).toBe('https://ibban.com/cart/c/abc?key=xyz')
+    expect(payload.customer_locale).toBe('es') // drives which template language
+    expect(extractShopifyPhone(payload)).toBe('34600123456')
+    // The link the reminder button actually sends.
+    expect(urlSuffix(payload.abandoned_checkout_url)).toBe('cart/c/abc?key=xyz')
+  })
+})
+
 describe('shopify webhook registration', () => {
+  it('converts topics between the REST and GraphQL spellings', () => {
+    expect(graphqlTopic('orders/create')).toBe('ORDERS_CREATE')
+    expect(graphqlTopic('app/uninstalled')).toBe('APP_UNINSTALLED')
+    for (const topic of ['orders/create', 'checkouts/update', 'fulfillments/create', 'app/uninstalled']) {
+      // Round-tripping must be lossless, or "already registered" never matches
+      // and every reconnect re-creates every subscription.
+      expect(restTopic(graphqlTopic(topic))).toBe(topic)
+    }
+  })
+
   it('never sends a GDPR compliance topic to the Admin API', async () => {
     // shopify.dev: the three compliance topics are created "via the Partner
     // Dashboard or by updating the app configuration TOML" — they are not in
@@ -1180,13 +1265,28 @@ describe('shopify webhook registration', () => {
 
   it('reports a partial failure instead of discarding the successes', async () => {
     const { registerShopifyWebhooks } = await import('@/lib/shopify/webhooks')
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init: any) => {
-      const url = String(input)
-      if (!init || init.method !== 'POST') return new Response(JSON.stringify({ webhooks: [] }), { status: 200 })
-      const topic = JSON.parse(init.body).webhook.topic
-      return topic === 'orders/updated'
-        ? new Response(JSON.stringify({ errors: 'nope' }), { status: 422 })
-        : new Response(JSON.stringify({ webhook: { id: 1, topic, address: url } }), { status: 200 })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input: any, init: any) => {
+      const body = JSON.parse(init.body)
+
+      // The existing-subscriptions read.
+      if (body.query.includes('webhookSubscriptions(first')) {
+        return new Response(JSON.stringify({ data: { webhookSubscriptions: { nodes: [] } } }), { status: 200 })
+      }
+
+      // Shopify reports a rejected topic in userErrors with HTTP 200, which is
+      // exactly the shape that must not be mistaken for success.
+      const failed = body.variables.topic === 'ORDERS_UPDATED'
+      return new Response(
+        JSON.stringify({
+          data: {
+            webhookSubscriptionCreate: {
+              webhookSubscription: failed ? null : { id: 'gid://shopify/WebhookSubscription/1' },
+              userErrors: failed ? [{ message: 'nope' }] : [],
+            },
+          },
+        }),
+        { status: 200 }
+      )
     })
 
     const { results, failed } = await registerShopifyWebhooks('x.myshopify.com', 't', 'https://app.test')

@@ -263,7 +263,17 @@ function IntegrationsScreen() {
                         setBusy('sync')
                         const res = await fetch('/api/shopify/sync', { method: 'POST' })
                         const json = await res.json()
-                        toast(res.ok ? `Synced ${json.orders} orders, ${json.products} products` : json.error, res.ok ? 'green' : 'red')
+                        // A per-resource failure used to be swallowed: the
+                        // toast reported a happy "0 products" while the real
+                        // reason sat unread in result.errors.
+                        toast(
+                          !res.ok
+                            ? json.error
+                            : json.errors?.length
+                              ? json.errors.join(' · ')
+                              : `Synced ${json.orders} orders, ${json.checkouts} carts, ${json.products} products`,
+                          res.ok && !json.errors?.length ? 'green' : 'red'
+                        )
                         setBusy('')
                         load()
                       }}
