@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabaseBrowser } from '@/lib/supabase/client'
-import { sessionWindow } from '@/lib/window'
+import { appendMessage, sessionWindow } from '@/lib/window'
 import { avatarColors, formatPhone, initialsOf } from '@/lib/phone'
 import { Button, Modal, Pill, money, relTime, useToast } from '@/components/ui'
 import {
@@ -84,6 +84,8 @@ export function InboxClient({
   const [newChatOpen, setNewChatOpen] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  /** Blocks a second click firing another REAL send before the first returns. */
+  const sendingTemplateRef = useRef(false)
 
   /* ------------------------------ layout ------------------------------ */
 
@@ -144,11 +146,7 @@ export function InboxClient({
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
         const m = payload.new as Msg
-        setMessages((prev) =>
-          m.conversation_id === activeIdRef.current && !prev.some((p) => p.id === m.id)
-            ? [...prev, m]
-            : prev
-        )
+        setMessages((prev) => (m.conversation_id === activeIdRef.current ? appendMessage(prev, m) : prev))
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => {
         const m = payload.new as Msg
@@ -259,12 +257,7 @@ export function InboxClient({
         return
       }
 
-      setMessages((prev) => {
-        const withoutTemp = prev.filter((m) => m.id !== optimisticId)
-        return withoutTemp.some((m) => m.id === json.message.id)
-          ? withoutTemp
-          : [...withoutTemp, json.message]
-      })
+      setMessages((prev) => appendMessage(prev, json.message, optimisticId))
       loadConversations()
     } catch (e: any) {
       setMessages((prev) =>
@@ -278,22 +271,37 @@ export function InboxClient({
 
   async function sendTemplate(name: string, language: string, variables: string[]) {
     if (!activeId) return
-    setTemplateOpen(false)
 
-    const res = await fetch(`/api/conversations/${activeId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'template', template_name: name, template_language: language, variables }),
-    })
-    const json = await res.json()
+    // A ref, not state: two clicks in the same tick both read the old state
+    // value and both get through. This is a REAL WhatsApp message — a double
+    // click used to send the customer the same template twice.
+    if (sendingTemplateRef.current) return
+    sendingTemplateRef.current = true
 
-    if (!res.ok) {
-      toast(json.error ?? 'Template send failed', 'red')
-      return
+    try {
+      const res = await fetch(`/api/conversations/${activeId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'template', template_name: name, template_language: language, variables }),
+      })
+      const json = await res.json()
+
+      if (!res.ok) {
+        toast(json.error ?? 'Template send failed', 'red')
+        return
+      }
+
+      setTemplateOpen(false)
+      // Realtime already delivered this row — appending it again is what put
+      // every template in the thread twice.
+      setMessages((prev) => appendMessage(prev, json.message))
+      toast('Template sent')
+      loadConversations()
+    } catch (e: any) {
+      toast(e?.message ?? 'Network error while sending', 'red')
+    } finally {
+      sendingTemplateRef.current = false
     }
-    setMessages((prev) => [...prev, json.message])
-    toast('Template sent')
-    loadConversations()
   }
 
   async function setStatus(status: string) {

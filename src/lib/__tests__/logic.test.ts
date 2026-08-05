@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHmac } from 'node:crypto'
 import { sanitizePhone, isValidPhone, phonesMatch, phoneVariants, extractShopifyPhone, initialsOf } from '@/lib/phone'
-import { sessionWindow, canSendFreeText, WINDOW_MS } from '@/lib/window'
+import { sessionWindow, canSendFreeText, appendMessage, WINDOW_MS } from '@/lib/window'
 import { normalize, matchesKeyword } from '@/lib/engines/types'
 import { isCodOrder, buildOrderVars } from '@/lib/engines/cod'
 import { urlSuffix, reminderPatch, MAX_SEND_ATTEMPTS } from '@/lib/engines/recovery'
@@ -13,6 +13,7 @@ import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
 import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { rowTagNames } from '@/app/api/contacts/import/route'
+import { recoveryLabel } from '@/app/(app)/carts/page'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -198,6 +199,66 @@ describe('recovery URL suffix', () => {
 /* ------------------------------------------------------------------ */
 /* Segments                                                            */
 /* ------------------------------------------------------------------ */
+
+describe('thread append', () => {
+  const m = (id: string) => ({ id, content: id })
+
+  it('never adds the same message twice', () => {
+    // A send delivers the row to the client TWICE — once over realtime, once
+    // as the POST response. The template path appended both, so every
+    // template showed twice in the inbox while WhatsApp had sent it once.
+    const prev = [m('a'), m('b')]
+    expect(appendMessage(prev, m('b'))).toEqual(prev)
+    expect(appendMessage(prev, m('c'))).toEqual([m('a'), m('b'), m('c')])
+  })
+
+  it('swaps an optimistic placeholder for the saved row', () => {
+    expect(appendMessage([m('a'), m('tmp-1')], m('real'), 'tmp-1')).toEqual([m('a'), m('real')])
+  })
+
+  it('drops the placeholder even when the row already arrived', () => {
+    expect(appendMessage([m('tmp-1'), m('real')], m('real'), 'tmp-1')).toEqual([m('real')])
+  })
+
+  it('tolerates a missing message', () => {
+    expect(appendMessage([m('a')], null)).toEqual([m('a')])
+    expect(appendMessage([m('a'), m('tmp-1')], undefined, 'tmp-1')).toEqual([m('a')])
+  })
+
+  it('is the only appender in the inbox, so the paths cannot diverge again', () => {
+    // The free-text path deduped and the template path did not — one helper
+    // now serves both, and a raw spread would reintroduce the split.
+    const client = readFileSync(join(process.cwd(), 'src/app/(app)/inbox/InboxClient.tsx'), 'utf8')
+    const rawAppends = client.match(/setMessages\(\(prev\) => \[\s*\.\.\.prev,/g) ?? []
+    // The one permitted raw append is the optimistic placeholder, which has no
+    // server id yet and therefore nothing to dedupe against.
+    expect(rawAppends.length, 'use appendMessage() instead of spreading into setMessages').toBeLessThanOrEqual(1)
+  })
+})
+
+describe('carts page recovery label', () => {
+  it('never claims a recovery from the tracking row', () => {
+    // 'done' means three reminders were sent, NOT that the customer paid.
+    // Conversion is the checkout's own recovered/completed_at, rendered as a
+    // separate pill — reading it from here would invent revenue.
+    const done = recoveryLabel({ status: 'done', remindersSent: 3 }, true)
+    expect(done.text).toBe('Reminder 3 sent')
+    expect(done.text).not.toMatch(/recovered/i)
+  })
+
+  it('distinguishes every terminal state', () => {
+    expect(recoveryLabel({ status: 'opted_out', remindersSent: 1 }, true).text).toBe('Opted out')
+    expect(recoveryLabel({ status: 'suppressed_cooldown', remindersSent: 0 }, true).text).toMatch(/cooldown/)
+    expect(recoveryLabel({ status: 'skipped_no_phone', remindersSent: 0 }, false).text).toMatch(/number missing/)
+    expect(recoveryLabel({ status: 'completed_order', remindersSent: 1 }, true).text).toMatch(/order placed/)
+    expect(recoveryLabel({ status: 'active', remindersSent: 0 }, true).text).toBe('Recovery scheduled')
+  })
+
+  it('flags a missing number even before a tracking row exists', () => {
+    expect(recoveryLabel(null, false).text).toMatch(/number missing/)
+    expect(recoveryLabel(null, true).text).toBe('No recovery yet')
+  })
+})
 
 describe('recovery reminder retries', () => {
   const at = () => 'NOW'

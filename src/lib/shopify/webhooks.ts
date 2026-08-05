@@ -65,7 +65,12 @@ export async function registerShopifyWebhooks(
       body: JSON.stringify({ webhook: { topic, address, format: 'json' } }),
     })
 
-    results.push({ topic, ok: res.ok, error: res.ok ? undefined : res.error })
+    // "address has already been taken" means the subscription exists, which is
+    // the outcome we wanted. Treating it as an error made every re-register
+    // look like a failure.
+    const alreadyExists = !res.ok && /already been taken|already exists/i.test(res.error ?? '')
+
+    results.push({ topic, ok: res.ok || alreadyExists, error: res.ok || alreadyExists ? undefined : res.error })
   }
 
   // Deliberately NOT throwing on a partial failure. Registration is a loop of

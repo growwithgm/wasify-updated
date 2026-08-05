@@ -80,6 +80,17 @@ export const IconCatalog = (p: P) => (
   </svg>
 )
 
+/** A cart left behind — the trolley with a clock. */
+export const IconCarts = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M2.5 3.5h2l2.3 10.4a1.6 1.6 0 0 0 1.6 1.3h7.2" />
+    <path d="M6.2 6.5h13l-1.4 6H7.5" />
+    <circle cx="17.5" cy="18.5" r="3" />
+    <path d="M17.5 17v1.6l1.1.7" />
+    <circle cx="9" cy="19.5" r="1" />
+  </svg>
+)
+
 export const IconPipelines = (p: P) => (
   <svg {...base(p)}>
     <rect x="3" y="4" width="5" height="16" rx="1" />

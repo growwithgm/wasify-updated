@@ -271,6 +271,27 @@ function IntegrationsScreen() {
                     >
                       <IconRefresh size={12} /> Sync now
                     </Button>
+                    <Button
+                      size="sm"
+                      loading={busy === 'hooks'}
+                      onClick={async () => {
+                        setBusy('hooks')
+                        const res = await fetch('/api/shopify/webhooks', { method: 'POST' })
+                        const json = await res.json()
+                        toast(
+                          !res.ok
+                            ? json.error
+                            : json.failed.length
+                              ? `${json.registered.length} registered, ${json.failed.length} failed`
+                              : `All ${json.registered.length} webhooks registered`,
+                          res.ok && !json.failed.length ? 'green' : 'red'
+                        )
+                        setBusy('')
+                        load()
+                      }}
+                    >
+                      Register webhooks
+                    </Button>
                     <Button size="sm" onClick={() => setRecoveryTestOpen(true)}>
                       Test recovery
                     </Button>

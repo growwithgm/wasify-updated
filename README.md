@@ -84,7 +84,10 @@ enforced in code, and most are covered by a test.
 5. **Backfilled data never triggers messaging.** Imported orders are written
    with `source='backfill'`; only live webhook events start a conversation.
    (Recovery *rows* are the deliberate exception, so the carts page has
-   history — sending stays gated.)
+   history — sending stays gated.) A backfill never downgrades a row already
+   stamped `webhook`, and a null never overwrites a stored value — the phone
+   usually arrives on a later `checkouts/update`, and a thin REST payload
+   would otherwise blank the field the reminder depends on.
 6. **Contact dedupe is one algorithm.** `phonesMatch()` — exact digits or the
    last 8 — used by the webhook, new-chat, CSV import, COD and recovery alike.
    Two implementations means split threads.
@@ -110,6 +113,14 @@ enforced in code, and most are covered by a test.
     loop. They are configured in the Partner Dashboard and handled at the same
     endpoint. `shop/redact` arrives ~48h *after* uninstall, once the token is
     gone, so those topics resolve the tenant by store domain alone.
+13. **Conversion is the checkout's, progress is ours.** `shopify_checkouts`
+    owns `recovered`/`completed_at`; `checkout_recoveries` owns status and
+    counters. The carts page reads the green "Recovered" badge strictly from
+    the checkout — a tracking row at `done` only means three reminders went
+    out, and reading it as a recovery would invent revenue.
+14. **A failed reminder is not a sent one.** The stage stays due and retries
+    (five attempts), so correcting a bad template also rescues the carts
+    already in flight.
 
 ---
 
@@ -119,7 +130,7 @@ enforced in code, and most are covered by a test.
 npm install
 cp .env.example .env.local     # fill it in
 npm run dev                    # http://localhost:3000
-npm test                       # 60 unit tests
+npm test                       # unit tests
 npm run typecheck
 ```
 
@@ -149,7 +160,7 @@ Every sweep is idempotent, so you can run it as often as you like.
 ```
 supabase/schema.sql          the whole database, idempotent
 src/app/(auth)/              login, signup
-src/app/(app)/               the 13 screens, wrapped in the shell
+src/app/(app)/               the 14 screens, wrapped in the shell
 src/app/api/                 route handlers
 src/lib/
   phone.ts                   sanitize / validate / match — the dedupe rules

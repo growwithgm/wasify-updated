@@ -115,12 +115,17 @@ export async function ensureCheckoutRecovery(db: any, userId: string, checkoutRo
 
   if (cooldownDays > 0) {
     const since = new Date(Date.now() - cooldownDays * 86400_000).toISOString()
+    // Only a phone that was actually MESSAGED starts a cooldown. Counting
+    // rows that never sent anything — no phone, opted out, or still waiting
+    // for their first reminder — would suppress people who have heard
+    // nothing from us at all.
     const { data: recent } = await db
       .from('checkout_recoveries')
       .select('phone')
       .eq('user_id', userId)
       .gte('created_at', since)
       .not('phone', 'is', null)
+      .gte('reminders_sent', 1)
       .limit(200)
 
     if ((recent ?? []).some((r: any) => phonesMatch(r.phone, phone))) {
@@ -151,10 +156,12 @@ export async function ensureCheckoutRecovery(db: any, userId: string, checkoutRo
 /* ------------------------------------------------------------------ */
 
 export async function runRecoveryTimers(db: any): Promise<{ sent: number; stopped: number }> {
+  // Oldest first: the carts closest to going cold get the batch's capacity.
   const { data: rows } = await db
     .from('checkout_recoveries')
     .select('*')
     .eq('status', 'active')
+    .order('created_at', { ascending: true })
     .limit(500)
 
   let sent = 0
@@ -177,41 +184,61 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
     ]
 
     for (const row of userRows) {
-      if (!row.phone) continue
+      // One bad row must never take the rest of the sweep down with it — the
+      // remaining carts would silently miss their window.
+      try {
+        if (!row.phone) {
+          // Defensive: an active row without a phone can never be sent, and
+          // leaving it active means re-examining it on every single sweep.
+          await db.from('checkout_recoveries').update({ status: 'skipped_no_phone' }).eq('id', row.id)
+          continue
+        }
 
-      // ---- re-read the checkout RIGHT BEFORE sending ----
-      const { data: checkout } = await db
-        .from('shopify_checkouts')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('shopify_checkout_id', row.shopify_checkout_id)
-        .maybeSingle()
+        // ---- re-read the checkout RIGHT BEFORE sending ----
+        const { data: checkout } = await db
+          .from('shopify_checkouts')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('shopify_checkout_id', row.shopify_checkout_id)
+          .maybeSingle()
 
-      if (!checkout) continue
+        if (!checkout) continue
 
-      if (checkout.completed_at || checkout.recovered) {
-        await db.from('checkout_recoveries').update({ status: 'completed_order' }).eq('id', row.id)
-        stopped++
-        continue
+        if (checkout.completed_at || checkout.recovered) {
+          await db.from('checkout_recoveries').update({ status: 'completed_order' }).eq('id', row.id)
+          stopped++
+          continue
+        }
+
+        const ageMinutes = (Date.now() - new Date(row.created_at).getTime()) / 60_000
+
+        // Highest DUE stage fires once — never a burst of three.
+        let stage = 0
+        for (let i = 0; i < 3; i++) {
+          if (ageMinutes >= delays[i] && row.reminders_sent < i + 1) stage = i + 1
+        }
+        if (stage === 0) continue
+
+        const result = await sendReminder(db, userId, config, row, checkout, stage)
+
+        await db
+          .from('checkout_recoveries')
+          .update({
+            ...reminderPatch(stage, result, row.send_attempts ?? 0),
+            // Linkage for the Carts page: which contact and thread this went to.
+            ...(result.contactId ? { contact_id: result.contactId } : {}),
+            ...(result.conversationId ? { conversation_id: result.conversationId } : {}),
+          })
+          .eq('id', row.id)
+
+        if (result.ok) sent++
+      } catch (e: any) {
+        console.error('[recovery] row failed', row.id, e)
+        await db
+          .from('checkout_recoveries')
+          .update({ last_error: `Sweep error: ${e?.message ?? e}` })
+          .eq('id', row.id)
       }
-
-      const ageMinutes = (Date.now() - new Date(row.created_at).getTime()) / 60_000
-
-      // Highest DUE stage fires once — never a burst of three.
-      let stage = 0
-      for (let i = 0; i < 3; i++) {
-        if (ageMinutes >= delays[i] && row.reminders_sent < i + 1) stage = i + 1
-      }
-      if (stage === 0) continue
-
-      const result = await sendReminder(db, userId, config, row, checkout, stage)
-
-      await db
-        .from('checkout_recoveries')
-        .update(reminderPatch(stage, result, row.send_attempts ?? 0))
-        .eq('id', row.id)
-
-      if (result.ok) sent++
     }
   }
 
@@ -225,7 +252,13 @@ export async function sendReminder(
   row: any,
   checkout: any,
   stage: number
-): Promise<{ ok: boolean; error?: string; discountCode?: string }> {
+): Promise<{
+  ok: boolean
+  error?: string
+  discountCode?: string
+  contactId?: string | null
+  conversationId?: string | null
+}> {
   /* ---------------- template selection by locale ---------------- */
   const es = config[`recovery_r${stage}_template_es`]
   const en = config[`recovery_r${stage}_template_en`]
@@ -314,18 +347,26 @@ export async function sendReminder(
     language
   )
 
+  let linkage: { contactId?: string | null; conversationId?: string | null } = {}
+
   if (res.ok) {
-    await mirrorToThread(db, userId, row, checkout, templateName, res.wamid)
+    linkage = await mirrorToThread(db, userId, row, checkout, templateName, res.wamid)
     await logActivity(db, userId, {
       kind: 'recovery',
       title: `Cart reminder ${stage} sent`,
       detail: discountCode ? `with code ${discountCode}` : undefined,
-      contactId: row.contact_id ?? undefined,
+      contactId: linkage.contactId ?? row.contact_id ?? undefined,
       amount: Number(checkout.total_price ?? 0),
     })
   }
 
-  return { ok: res.ok, error: res.ok ? undefined : res.error, discountCode }
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : res.error,
+    discountCode,
+    contactId: linkage.contactId ?? null,
+    conversationId: linkage.conversationId ?? null,
+  }
 }
 
 /** Path + query only — the domain lives in the template's button base URL. */
@@ -358,14 +399,29 @@ async function mirrorToThread(
   templateName: string,
   wamid?: string
 ) {
-  if (!row.contact_id) return
-  const conversationId = await findOrCreateConversation(db, userId, row.contact_id)
-  if (!conversationId) return
+  // A recovery row can predate its contact — a backfilled cart, or one
+  // captured before the phone arrived. Resolve it here through the SAME
+  // matcher the inbound webhook uses, so the customer's reply lands in this
+  // very thread instead of opening a second one.
+  let contactId: string | null = row.contact_id ?? checkout.contact_id ?? null
+  if (!contactId && row.phone) {
+    const contact = await findOrCreateContact(db, userId, row.phone, {
+      name: checkout.customer_name ?? null,
+      email: checkout.customer_email ?? null,
+      locale: checkout.customer_locale ?? null,
+      source: 'shopify',
+    })
+    contactId = contact?.id ?? null
+  }
+  if (!contactId) return {}
+
+  const conversationId = await findOrCreateConversation(db, userId, contactId)
+  if (!conversationId) return { contactId }
 
   await db.from('messages').insert({
     user_id: userId,
     conversation_id: conversationId,
-    contact_id: row.contact_id,
+    contact_id: contactId,
     sender_type: 'bot',
     content_type: 'template',
     content: `Cart recovery reminder — ${formatMoney(checkout.total_price, checkout.currency)}`,
@@ -373,6 +429,8 @@ async function mirrorToThread(
     message_id: wamid ?? null,
     status: wamid ? 'sent' : 'failed',
   })
+
+  return { contactId, conversationId }
 }
 
 /* ------------------------------------------------------------------ */
@@ -468,26 +526,40 @@ export async function upsertCheckoutFromWebhook(
     contactId = contact?.id ?? null
   }
 
+  const address = payload.shipping_address ?? payload.billing_address ?? {}
+  const customerName =
+    [payload.customer?.first_name, payload.customer?.last_name].filter(Boolean).join(' ') ||
+    address.name ||
+    [address.first_name, address.last_name].filter(Boolean).join(' ') ||
+    null
+
   const row = {
     user_id: userId,
     shopify_checkout_id: shopifyCheckoutId,
     token: payload.token ?? null,
     contact_id: contactId,
-    customer_name:
-      [payload.customer?.first_name, payload.customer?.last_name].filter(Boolean).join(' ') || null,
+    customer_name: customerName,
     customer_email: payload.customer?.email ?? payload.email ?? null,
     customer_phone: phone || null,
     customer_locale: payload.customer_locale ?? null,
     total_price: Number(payload.total_price ?? 0),
-    currency: payload.currency ?? 'EUR',
+    currency: payload.currency ?? payload.presentment_currency ?? 'EUR',
     items_count: (payload.line_items ?? []).reduce((s: number, l: any) => s + (l.quantity ?? 0), 0),
     line_items: (payload.line_items ?? []).slice(0, 50).map((l: any) => ({
       title: l.title,
       quantity: l.quantity,
       price: l.price,
+      variant_title: l.variant_title ?? null,
+      sku: l.sku ?? null,
     })),
     abandoned_checkout_url: payload.abandoned_checkout_url ?? null,
     completed_at: payload.completed_at ?? null,
+    // Conversion truth. Kept in step with completed_at so the UI can key the
+    // "Recovered" badge off the checkout itself rather than a tracking row.
+    recovered: !!payload.completed_at,
+    // Shopify surfaces a checkout only once it is abandonment-eligible.
+    abandoned_at: payload.created_at ?? null,
+    raw: payload,
     source,
     shopify_created_at: payload.created_at ?? null,
     shopify_updated_at: payload.updated_at ?? null,
@@ -495,7 +567,9 @@ export async function upsertCheckoutFromWebhook(
 
   const { data } = await db
     .from('shopify_checkouts')
-    .upsert(row, { onConflict: 'user_id,shopify_checkout_id' })
+    .upsert(mergeWithStored(await storedCheckout(db, userId, shopifyCheckoutId), row), {
+      onConflict: 'user_id,shopify_checkout_id',
+    })
     .select('*')
     .single()
 
@@ -504,4 +578,50 @@ export async function upsertCheckoutFromWebhook(
   if (data) await ensureCheckoutRecovery(db, userId, data)
 
   return data
+}
+
+async function storedCheckout(db: any, userId: string, shopifyCheckoutId: string) {
+  const { data } = await db
+    .from('shopify_checkouts')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('shopify_checkout_id', shopifyCheckoutId)
+    .maybeSingle()
+  return data
+}
+
+/**
+ * Merge an incoming mapping over what is already stored, without losing data.
+ *
+ * Two rules, both from the brief's source discipline:
+ *
+ * · A `backfill` never downgrades a row already marked `webhook`. Only live
+ *   webhook data may trigger messaging elsewhere, so the stamp must not drift
+ *   backwards just because a nightly reconcile touched the row.
+ *
+ * · A null never overwrites a stored value. The phone usually arrives on a
+ *   LATER checkouts/update as the customer types it, and the REST backfill
+ *   payload is thinner than the webhook one — so a plain upsert would blank
+ *   out the very field the reminder depends on.
+ */
+export function mergeWithStored(stored: any | null, incoming: Record<string, any>): Record<string, any> {
+  if (!stored) return incoming
+
+  const merged: Record<string, any> = { ...incoming }
+
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value == null && stored[key] != null) merged[key] = stored[key]
+  }
+
+  if (stored.source === 'webhook') merged.source = 'webhook'
+
+  // Conversion is one-way: a thin backfill payload must not un-complete a
+  // checkout the webhook already reported as paid.
+  if (stored.completed_at && !incoming.completed_at) {
+    merged.completed_at = stored.completed_at
+    merged.recovered = true
+  }
+  if (stored.recovered) merged.recovered = true
+
+  return merged
 }

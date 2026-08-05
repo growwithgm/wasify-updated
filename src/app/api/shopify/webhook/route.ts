@@ -76,6 +76,8 @@ export async function POST(request: Request) {
 
   if (!config) return NextResponse.json({ received: true })
 
+  let failed = false
+
   try {
     // Attach the domain so downstream helpers can resolve tenant config.
     payload.__store_domain = domain
@@ -89,6 +91,7 @@ export async function POST(request: Request) {
     }
   } catch (e: any) {
     console.error('[shopify-webhook]', topic, e)
+    failed = true
     if (logRow) {
       await db
         .from('shopify_webhook_events')
@@ -97,7 +100,14 @@ export async function POST(request: Request) {
     }
   }
 
-  // Always 200 — a non-2xx makes Shopify retry and eventually disable the hook.
+  // A SAVE failure returns 500 on purpose, so Shopify retries and the capture
+  // is not lost — every write on this path is an idempotent upsert, so a retry
+  // is free. Anything else (unknown shop, ignored topic) is a 200: retrying
+  // would never change the outcome and repeated failures make Shopify disable
+  // the subscription outright.
+  if (failed) {
+    return NextResponse.json({ received: false, retry: true }, { status: 500 })
+  }
   return NextResponse.json({ received: true })
 }
 

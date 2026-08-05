@@ -33,6 +33,26 @@ export function sessionWindow(lastInboundAt: string | null | undefined): WindowS
 }
 
 /** Can we send free text right now, or must it be a template? */
+/**
+ * Append a saved message to a thread exactly once.
+ *
+ * A send produces the row TWICE on the client: the realtime INSERT arrives,
+ * and the POST returns the same row. The free-text path guarded against that;
+ * the template path did not, so every template appeared twice in the inbox
+ * while the customer had received it once.
+ *
+ * `replaceId` drops an optimistic placeholder in the same pass.
+ */
+export function appendMessage<T extends { id: string }>(
+  prev: T[],
+  message: T | null | undefined,
+  replaceId?: string
+): T[] {
+  const base = replaceId ? prev.filter((m) => m.id !== replaceId) : prev
+  if (!message) return base
+  return base.some((m) => m.id === message.id) ? base : [...base, message]
+}
+
 export function canSendFreeText(lastInboundAt: string | null | undefined): boolean {
   return sessionWindow(lastInboundAt).open
 }

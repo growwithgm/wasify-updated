@@ -941,6 +941,13 @@ create table if not exists public.shopify_checkouts (
   recovered               boolean not null default false,
   recovered_order_id      text,
 
+  -- Shopify only surfaces a checkout once it is abandonment-eligible, so its
+  -- created_at is the anchor the reminder ladder measures from.
+  abandoned_at            timestamptz,
+  -- The full payload. Shopify adds fields faster than the mapper does, and a
+  -- capture that dropped something is otherwise unrecoverable.
+  raw                     jsonb,
+
   source                  text not null default 'webhook',
   shopify_created_at      timestamptz,
   shopify_updated_at      timestamptz,
@@ -948,6 +955,10 @@ create table if not exists public.shopify_checkouts (
   updated_at              timestamptz not null default now(),
   unique (user_id, shopify_checkout_id)
 );
+
+-- Added after the first release; keeps an existing database in step.
+alter table public.shopify_checkouts add column if not exists abandoned_at timestamptz;
+alter table public.shopify_checkouts add column if not exists raw jsonb;
 
 create index if not exists shopify_checkouts_user_idx on public.shopify_checkouts(user_id, shopify_created_at desc);
 
@@ -1094,6 +1105,9 @@ create table if not exists public.checkout_recoveries (
 -- Added after the first release; keeps an existing database in step.
 alter table public.checkout_recoveries
   add column if not exists send_attempts integer not null default 0;
+-- Which thread the reminders were mirrored into, so the UI can link to it.
+alter table public.checkout_recoveries
+  add column if not exists conversation_id uuid references public.conversations(id) on delete set null;
 
 create index if not exists checkout_recoveries_active_idx
   on public.checkout_recoveries(user_id, status) where status = 'active';
