@@ -466,6 +466,22 @@ which is the entire point of the reminder.
 Wasify reads the shape of the approved template before sending, so a static
 button is reported as a configuration error rather than a wall of failures.
 
+### Testing it without waiting
+
+**Integrations → Shopify → Test recovery** lists your recent abandoned
+checkouts and fires reminder 1, 2 or 3 at one of them immediately — the same
+template, cart link and discount the timer would use, so a pass means the real
+thing works.
+
+It does **not** advance the sequence, so testing never consumes a reminder the
+customer should still receive, and it works before `Enable cart recovery` is
+switched on. It does send a real message to a real customer, so test against
+your own number first.
+
+A failed reminder no longer counts as sent either: the stage stays due and
+retries on the next tick (up to five attempts), so correcting a template also
+rescues the carts already in flight.
+
 Each reminder needs **one** template. The Spanish field is optional — add it
 only if you serve Spanish-speaking customers, and Wasify picks it by the
 customer's locale.

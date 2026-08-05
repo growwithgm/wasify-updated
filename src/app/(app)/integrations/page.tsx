@@ -3,10 +3,11 @@
 import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import {
-  Button, Card, CardTitle, ErrorState, Input, Modal, Page, PageHeader, Pill, Select,
+  Button, Card, CardTitle, EmptyState, ErrorState, Input, Modal, Page, PageHeader, Pill, Select,
   Table, TableSkeleton, Td, Th, ToastProvider, relTime, useToast,
 } from '@/components/ui'
 import { IconMeta, IconRefresh, IconShopify, IconTrash, IconWhatsApp } from '@/components/icons'
+import { formatPhone } from '@/lib/phone'
 
 export default function IntegrationsPage() {
   return (
@@ -29,6 +30,7 @@ function IntegrationsScreen() {
   const [diagnostics, setDiagnostics] = useState<any>(null)
   const [busy, setBusy] = useState('')
   const [oauthError, setOauthError] = useState('')
+  const [recoveryTestOpen, setRecoveryTestOpen] = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -269,6 +271,9 @@ function IntegrationsScreen() {
                     >
                       <IconRefresh size={12} /> Sync now
                     </Button>
+                    <Button size="sm" onClick={() => setRecoveryTestOpen(true)}>
+                      Test recovery
+                    </Button>
                     <Button size="sm" variant="ghost" onClick={disconnectShopify}>
                       Disconnect
                     </Button>
@@ -404,6 +409,7 @@ function IntegrationsScreen() {
       )}
 
       {shopOpen && <ShopifyModal siteUrl={siteUrl} onClose={() => setShopOpen(false)} />}
+      {recoveryTestOpen && <RecoveryTestModal onClose={() => setRecoveryTestOpen(false)} />}
 
       {keyOpen && (
         <ApiKeyModal
@@ -608,6 +614,187 @@ function WhatsAppModal({
         <div className="mt-3 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: 'var(--w-errortint)', color: '#B91C1C' }}>
           {error}
         </div>
+      )}
+    </Modal>
+  )
+}
+
+/**
+ * Fire one cart reminder at a real abandoned checkout, now.
+ *
+ * The alternative is abandoning a cart yourself and waiting 45 minutes to find
+ * out the template is wrong. This sends exactly what the timer sends, without
+ * advancing the sequence — so testing does not consume a reminder the customer
+ * should still get.
+ */
+function RecoveryTestModal({ onClose }: { onClose: () => void }) {
+  const [data, setData] = useState<any>(null)
+  const [error, setError] = useState('')
+  const [picked, setPicked] = useState('')
+  const [stage, setStage] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<any>(null)
+
+  useEffect(() => {
+    fetch('/api/recovery/test', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => (j.error ? setError(j.error) : setData(j)))
+      .catch((e) => setError(e.message))
+  }, [])
+
+  const checkouts: any[] = data?.checkouts ?? []
+  const chosen = checkouts.find((c) => c.id === picked)
+
+  async function send() {
+    setBusy(true)
+    setResult(null)
+    try {
+      const res = await fetch('/api/recovery/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkout_id: picked, stage }),
+      })
+      const json = await res.json()
+      setResult(res.ok ? json : { ok: false, error: json.error })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Test cart recovery"
+      width={640}
+      footer={
+        <>
+          <Button onClick={onClose}>Close</Button>
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={!chosen || !!chosen.blocked}
+            onClick={send}
+          >
+            Send reminder {stage} now
+          </Button>
+        </>
+      }
+    >
+      <div
+        className="mb-3 rounded-lg px-3 py-2 text-[12.5px] leading-relaxed"
+        style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+      >
+        This sends a <b>real WhatsApp message to a real customer</b> — same template, cart link and
+        discount the timer would use. It does not advance the sequence, so the customer still receives
+        their scheduled reminders.
+      </div>
+
+      {error && (
+        <div className="mb-3 rounded-lg px-3 py-2 text-[12.5px]" style={{ background: 'var(--w-errortint)', color: '#B91C1C' }}>
+          {error}
+        </div>
+      )}
+
+      {!data ? (
+        <TableSkeleton rows={4} cols={3} />
+      ) : checkouts.length === 0 ? (
+        <EmptyState
+          title="No checkouts yet"
+          body="Abandon a cart in your store — leave checkout after entering a phone number — and it appears here within seconds."
+        />
+      ) : (
+        <>
+          <div className="mb-1.5 text-[12.5px] font-medium">Recent abandoned checkouts</div>
+          <div className="max-h-64 overflow-y-auto rounded-lg border" style={{ borderColor: 'var(--w-border)' }}>
+            {checkouts.map((c) => {
+              const on = c.id === picked
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => !c.blocked && setPicked(c.id)}
+                  disabled={!!c.blocked}
+                  className="flex w-full items-start gap-2 border-b px-3 py-2 text-left last:border-b-0"
+                  style={{
+                    borderColor: 'var(--w-border)',
+                    background: on ? 'var(--w-greentint)' : 'transparent',
+                    cursor: c.blocked ? 'not-allowed' : 'pointer',
+                    opacity: c.blocked ? 0.55 : 1,
+                  }}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-semibold">{c.name || 'Unnamed customer'}</span>
+                    <span className="block text-[11.5px]" style={{ color: 'var(--w-muted)', fontFamily: "'JetBrains Mono', monospace" }}>
+                      {c.phone ? formatPhone(c.phone) : 'no phone'}
+                    </span>
+                    <span className="block text-[11.5px]" style={{ color: 'var(--w-muted)' }}>
+                      {c.items ?? 0} item(s) · {c.total ?? 0} {c.currency ?? ''} · {relTime(c.createdAt)}
+                      {c.remindersSent > 0 && ` · ${c.remindersSent} reminder(s) already sent`}
+                    </span>
+                    {c.blocked && (
+                      <span className="mt-0.5 block text-[11.5px]" style={{ color: '#B91C1C' }}>
+                        {c.blocked}
+                      </span>
+                    )}
+                    {!c.blocked && !c.hasCartLink && (
+                      <span className="mt-0.5 block text-[11.5px]" style={{ color: '#92400E' }}>
+                        No cart link on this checkout — the button will be sent without one.
+                      </span>
+                    )}
+                    {c.lastError && (
+                      <span className="mt-0.5 block text-[11.5px]" style={{ color: '#B91C1C' }}>
+                        Last error: {c.lastError}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="mt-3 text-[12.5px] font-medium">Which reminder to send</div>
+          <div className="mt-1.5 flex gap-1.5">
+            {[1, 2, 3].map((n) => (
+              <button
+                key={n}
+                onClick={() => setStage(n)}
+                className="cursor-pointer rounded-full border px-3 py-[5px] text-[12.5px] font-medium"
+                style={{
+                  background: stage === n ? 'var(--w-green)' : 'var(--w-card)',
+                  color: stage === n ? '#fff' : 'var(--w-muted)',
+                  borderColor: stage === n ? 'var(--w-green)' : 'var(--w-border)',
+                }}
+              >
+                Reminder {n}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1.5 text-[11.5px]" style={{ color: 'var(--w-muted)' }}>
+            Each reminder has its own template, variables and discount — test all three.
+          </div>
+
+          {result && (
+            <div
+              className="mt-3 rounded-lg px-3 py-2.5 text-[12.5px] leading-relaxed"
+              style={{
+                background: result.ok ? 'var(--w-greentint)' : 'var(--w-errortint)',
+                color: result.ok ? '#15803D' : '#B91C1C',
+              }}
+            >
+              {result.ok ? (
+                <>
+                  <b>Sent.</b> Reminder {result.stage} went to {formatPhone(result.phone)}.
+                  {result.discountCode && ` Discount code: ${result.discountCode}.`} Check the phone — and
+                  the Inbox, where the message is mirrored into the thread.
+                </>
+              ) : (
+                <>
+                  <b>Not sent.</b> {result.error}
+                </>
+              )}
+            </div>
+          )}
+        </>
       )}
     </Modal>
   )

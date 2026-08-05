@@ -6,7 +6,7 @@ import { sanitizePhone, isValidPhone, phonesMatch, phoneVariants, extractShopify
 import { sessionWindow, canSendFreeText, WINDOW_MS } from '@/lib/window'
 import { normalize, matchesKeyword } from '@/lib/engines/types'
 import { isCodOrder, buildOrderVars } from '@/lib/engines/cod'
-import { urlSuffix } from '@/lib/engines/recovery'
+import { urlSuffix, reminderPatch, MAX_SEND_ATTEMPTS } from '@/lib/engines/recovery'
 import { matchesDefinition, rfmLabel } from '@/lib/engines/segments'
 import { bestFaq } from '@/lib/engines/chatbot'
 import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
@@ -198,6 +198,47 @@ describe('recovery URL suffix', () => {
 /* ------------------------------------------------------------------ */
 /* Segments                                                            */
 /* ------------------------------------------------------------------ */
+
+describe('recovery reminder retries', () => {
+  const at = () => 'NOW'
+
+  it('marks the stage sent and clears the error on success', () => {
+    const p = reminderPatch(1, { ok: true }, 0, at)
+    expect(p).toMatchObject({ reminders_sent: 1, reminder1_sent_at: 'NOW', last_error: null, send_attempts: 0 })
+  })
+
+  it('does NOT consume the reminder when the send failed', () => {
+    // The bug this guards: a template with a static button failed, the stage
+    // was marked sent anyway, and all three reminders were burned in silence.
+    // Correcting the template then did nothing for carts already in flight.
+    const p = reminderPatch(1, { ok: false, error: 'static button' }, 0, at)
+    expect(p.reminders_sent).toBeUndefined()
+    expect(p.reminder1_sent_at).toBeUndefined()
+    expect(p).toMatchObject({ last_error: 'static button', send_attempts: 1 })
+  })
+
+  it('gives up after the cap so a broken setup cannot retry forever', () => {
+    const last = reminderPatch(1, { ok: false, error: 'nope' }, MAX_SEND_ATTEMPTS - 1, at)
+    expect(last).toMatchObject({ reminders_sent: 1, send_attempts: 0, last_error: 'nope' })
+  })
+
+  it('resets the counter for the next stage after a success', () => {
+    expect(reminderPatch(2, { ok: true }, 3, at).send_attempts).toBe(0)
+  })
+
+  it('closes the sequence only on the third reminder', () => {
+    expect(reminderPatch(2, { ok: true }, 0, at).status).toBeUndefined()
+    expect(reminderPatch(3, { ok: true }, 0, at).status).toBe('done')
+    // …and not while it is still retrying stage 3.
+    expect(reminderPatch(3, { ok: false, error: 'x' }, 0, at).status).toBeUndefined()
+  })
+
+  it('keeps a minted discount code even when the send failed', () => {
+    // The code was already created in Shopify — losing the reference would
+    // leak a single-use discount nothing can reconcile.
+    expect(reminderPatch(1, { ok: false, error: 'x', discountCode: 'SAVE10' }, 0, at).discount_code).toBe('SAVE10')
+  })
+})
 
 describe('segment evaluation', () => {
   const snap = (contact: any, tagIds: string[] = []) => ({

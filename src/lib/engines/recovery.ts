@@ -20,6 +20,49 @@ import { extractShopifyPhone, phonesMatch } from '@/lib/phone'
 
 const STAGE_COLUMNS = ['reminder1_sent_at', 'reminder2_sent_at', 'reminder3_sent_at'] as const
 
+/**
+ * How many times one reminder may fail before the sequence moves past it.
+ * At a 15-minute tick that is roughly an hour of retrying, which covers a
+ * template being corrected or a transient Meta error, without a permanently
+ * broken setup retrying until the checkout ages out.
+ */
+export const MAX_SEND_ATTEMPTS = 5
+
+/**
+ * What to write after attempting one reminder.
+ *
+ * A FAILED send used to still mark the reminder as sent, so a template with
+ * the wrong shape silently burned all three stages and delivered nothing —
+ * and correcting the template did not help the carts already in flight.
+ *
+ * A failure now leaves the stage due so the next tick retries it, and only
+ * gives up after MAX_SEND_ATTEMPTS so a permanently broken setup cannot loop
+ * until the checkout ages out.
+ */
+export function reminderPatch(
+  stage: number,
+  result: { ok: boolean; error?: string; discountCode?: string },
+  priorAttempts: number,
+  now: () => string = () => new Date().toISOString()
+): Record<string, unknown> {
+  const attempts = priorAttempts + 1
+  const consumed = result.ok || attempts >= MAX_SEND_ATTEMPTS
+
+  const patch: Record<string, unknown> = {
+    last_error: result.ok ? null : (result.error ?? 'Unknown error'),
+    send_attempts: consumed ? 0 : attempts,
+  }
+
+  if (consumed) {
+    patch.reminders_sent = stage
+    patch[STAGE_COLUMNS[stage - 1]] = now()
+    if (stage === 3) patch.status = 'done'
+  }
+
+  if (result.discountCode) patch.discount_code = result.discountCode
+  return patch
+}
+
 /* ------------------------------------------------------------------ */
 /* Intake                                                              */
 /* ------------------------------------------------------------------ */
@@ -163,15 +206,10 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
 
       const result = await sendReminder(db, userId, config, row, checkout, stage)
 
-      const patch: Record<string, unknown> = {
-        reminders_sent: stage,
-        [STAGE_COLUMNS[stage - 1]]: new Date().toISOString(),
-        last_error: result.ok ? null : result.error,
-      }
-      if (result.discountCode) patch.discount_code = result.discountCode
-      if (stage === 3) patch.status = 'done'
-
-      await db.from('checkout_recoveries').update(patch).eq('id', row.id)
+      await db
+        .from('checkout_recoveries')
+        .update(reminderPatch(stage, result, row.send_attempts ?? 0))
+        .eq('id', row.id)
 
       if (result.ok) sent++
     }
@@ -180,7 +218,7 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
   return { sent, stopped }
 }
 
-async function sendReminder(
+export async function sendReminder(
   db: any,
   userId: string,
   config: any,

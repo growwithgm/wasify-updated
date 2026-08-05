@@ -1080,12 +1080,20 @@ create table if not exists public.checkout_recoveries (
   reminder3_sent_at     timestamptz,
   discount_code         text,
   last_error            text,
+  -- Consecutive failures for the stage currently due. A failed send does NOT
+  -- consume its reminder — otherwise fixing a bad template never helps the
+  -- carts already in flight — but it cannot retry forever either.
+  send_attempts         integer not null default 0,
 
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now(),
   -- one row per checkout — the DB-level guard against double sequences
   unique (user_id, shopify_checkout_id)
 );
+
+-- Added after the first release; keeps an existing database in step.
+alter table public.checkout_recoveries
+  add column if not exists send_attempts integer not null default 0;
 
 create index if not exists checkout_recoveries_active_idx
   on public.checkout_recoveries(user_id, status) where status = 'active';
