@@ -901,7 +901,7 @@ describe('vercel.json', () => {
     const path = await import('node:path')
     const file = path.resolve(process.cwd(), 'vercel.json')
 
-    if (!fs.existsSync(file)) return // no config at all is valid and is what we ship
+    if (!fs.existsSync(file)) return // valid on Hobby, where the crons cannot run
 
     const config = JSON.parse(fs.readFileSync(file, 'utf8'))
     const unknown = Object.keys(config).filter((k) => !ALLOWED.has(k))
@@ -911,6 +911,22 @@ describe('vercel.json', () => {
       `vercel.json has key(s) Vercel will reject: ${unknown.join(', ')}. ` +
         'JSON has no comments — put explanations in README.md instead.'
     ).toEqual([])
+  })
+
+  it('every cron path points at a route that exists and is cron-guarded', async () => {
+    // A typo'd path in vercel.json fails silently: the Crons tab shows 404s
+    // and nothing runs. And a cron route without the secret guard would be
+    // openly callable by anyone who reads this public repo.
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const file = path.resolve(process.cwd(), 'vercel.json')
+    if (!fs.existsSync(file)) return
+
+    for (const cron of JSON.parse(fs.readFileSync(file, 'utf8')).crons ?? []) {
+      const route = path.resolve(process.cwd(), `src/app${cron.path}/route.ts`)
+      expect(fs.existsSync(route), `${cron.path} has no route file`).toBe(true)
+      expect(fs.readFileSync(route, 'utf8'), `${cron.path} is not cron-guarded`).toContain('isAuthorizedCron')
+    }
   })
 })
 
@@ -1217,7 +1233,7 @@ describe('shopify graphql backfill', () => {
     expect(route).toContain('isAuthorizedCron')
     expect(route).toContain('cronUnauthorizedBody')
     expect(route).toContain('syncStore')
-    expect(route).toContain('maxDuration = 60') // Hobby cap
+    expect(route).toContain('maxDuration = 300') // Vercel Pro cap
   })
 
   it('walks newest-first, so the first click lands the latest data', () => {

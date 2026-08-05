@@ -6,7 +6,7 @@ import { syncStore } from '@/lib/shopify/sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+export const maxDuration = 300
 
 /**
  * Scheduled Shopify reconciliation — the cron-safe twin of the manual
@@ -46,8 +46,9 @@ export async function GET(request: Request) {
       if (!config) continue
 
       // Split the remaining time across the tenants still waiting, so the
-      // last store in the list is never starved by the first.
-      const remainingMs = 50_000 - (Date.now() - started)
+      // last store in the list is never starved by the first. 280s inside
+      // Pro's 300-second cap, keeping headroom for the response itself.
+      const remainingMs = 280_000 - (Date.now() - started)
       if (remainingMs < 5_000) break
       const budgetMs = Math.floor(remainingMs / (list.length - i))
 

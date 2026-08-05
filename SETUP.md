@@ -1,4 +1,4 @@
-# Setup guide — Vercel Hobby + external cron
+# Setup guide — Vercel + Supabase + Meta + Shopify
 
 Follow this top to bottom. It takes about 30 minutes.
 
@@ -298,14 +298,31 @@ It reports presence only — it never shows a value.
 
 ---
 
-## Step 6 — Scheduling with cron-job.org
+## Step 6 — Scheduling
 
-Vercel Hobby only allows one cron run per day, which is far too coarse: the
-first cart reminder fires 45 minutes after abandonment. So scheduling lives at
-[cron-job.org](https://cron-job.org) instead, and this repo ships no
-`vercel.json` — Next.js needs no configuration on Vercel.
+### On Vercel Pro — nothing to schedule by hand
 
-Create **two** jobs.
+The repo ships a `vercel.json` with all three crons (tick every 15 minutes,
+sync hourly, daily at 03:00). They deploy with the app; the **Crons** tab in
+your Vercel project shows each run and its response.
+
+One requirement: **an environment variable named exactly `CRON_SECRET` must
+exist** — Vercel's scheduler authenticates by sending
+`Authorization: Bearer <CRON_SECRET>` and cannot send any other header. If you
+only set `AUTOMATION_CRON_SECRET` earlier, add `CRON_SECRET` too (any value,
+`openssl rand -hex 24`; both may coexist), then redeploy.
+
+If you also created cron-job.org jobs earlier, delete them once the Vercel
+Crons tab shows green runs — duplicates are harmless (every sweep is
+idempotent) but pointless.
+
+### On Vercel Hobby — cron-job.org instead
+
+Hobby only allows one cron run per day, far too coarse for a 45-minute cart
+reminder. Delete `vercel.json` (Hobby rejects its `*/15` schedule at deploy
+time) and create the jobs below at [cron-job.org](https://cron-job.org).
+
+Create **two** jobs (plus the optional third).
 
 ### Job 1 — Wasify tick *(the important one)*
 
@@ -510,11 +527,12 @@ customer's locale.
 
 | Symptom | Cause |
 |---|---|
-| Deploy fails: *"Hobby accounts are limited to daily cron jobs"* | An old `vercel.json` with a `*/15` cron. Pull the latest — this repo declares none. |
+| Deploy fails: *"Hobby accounts are limited to daily cron jobs"* | The shipped `vercel.json` needs Vercel **Pro**. On Hobby, delete the file and use cron-job.org (Step 6). |
 | *"This deployment can not be redeployed. Please try again from a fresh commit."* | Vercel will not rebuild an older deployment. Push any commit (`git commit --allow-empty -m "rebuild"`) — the new build picks up your current environment variables. |
 | Env var changed but the app behaves as before | `NEXT_PUBLIC_*` values are baked in at build time. A rebuild is required, not just saving the variable. |
 | Everything looks fine but nothing reaches the app | The URL points at a different project. Check `NEXT_PUBLIC_SITE_URL` and your cron jobs against **Settings → Domains** for *this* project. |
-| Deploy fails: *maxDuration must be between 1 and 60* | Same — pull the latest, all routes are 60s now. |
+| Deploy fails: *maxDuration must be between 1 and 60* | The cron and import routes declare 300s, which needs Vercel **Pro**. On Hobby, lower them to 60. |
+| Vercel crons run but every one is `401` | Vercel authenticates with `Authorization: Bearer <CRON_SECRET>` and only when a variable named exactly `CRON_SECRET` exists. `AUTOMATION_CRON_SECRET` alone does not cover the built-in crons — add `CRON_SECRET` and redeploy. |
 | Deploy fails: *`vercel.json` schema validation failed … should NOT have additional property* | Vercel rejects any key it does not recognise, including comment-style keys like `_note`. JSON has no comments. This repo ships **no `vercel.json`** at all — Next.js needs none. Delete the file or strip the offending key. |
 | WhatsApp webhook returns `503` | `META_APP_SECRET` is not set. This is deliberate: an unverified webhook would let anyone who knows the URL inject messages into your inbox. |
 | Webhook verification fails in Meta | The verify token does not match. Press **Generate** in Wasify again and re-paste. |

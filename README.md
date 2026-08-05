@@ -17,39 +17,34 @@ variables are missing and what each one breaks.
 
 ### Scheduling
 
-Vercel's Hobby plan allows only one cron run per day, which cannot express a
-45-minute first cart reminder. Scheduling therefore lives in an external
-service, and this repo intentionally has **no `vercel.json`** — Next.js needs
-no configuration on Vercel, and an empty config file is one more thing to break.
-
-Set up two jobs at [cron-job.org](https://cron-job.org), both `GET`, each
-carrying your cron secret as a header. Which header depends on which variable
-you set — `CRON_SECRET` uses `Authorization: Bearer <value>`, and
-`AUTOMATION_CRON_SECRET` uses `x-cron-secret: <value>`. `/api/health` prints
-the exact line to paste.
+This repo ships a `vercel.json` with three crons, which need **Vercel Pro**
+(Hobby allows only one run per day — far too coarse for a 45-minute cart
+reminder):
 
 | Schedule | URL | What it does |
 |---|---|---|
 | every 15 min | `/api/cron/tick` | COD reminders, cart-recovery sends, automation waits, flow delays, queued broadcasts, snooze wake-ups |
-| hourly *(optional)* | `/api/cron/sync` | Shopify reconciliation — the schedulable twin of "Sync now"; resumes a large history import on its own |
-| daily 03:00 | `/api/cron/daily` | Shopify backfill, RFM scoring, segment refresh, log pruning |
+| hourly | `/api/cron/sync` | Shopify reconciliation — the schedulable twin of "Sync now"; finishes a large history import on its own |
+| daily 03:00 | `/api/cron/daily` | RFM scoring, segment refresh, log pruning, a light backfill |
 
-Every sweep is idempotent, so running either more often than needed is harmless.
+**Vercel's cron scheduler authenticates with `Authorization: Bearer
+<CRON_SECRET>` — it only does this when an environment variable named exactly
+`CRON_SECRET` exists.** `AUTOMATION_CRON_SECRET` alone is not enough for the
+built-in crons, because Vercel cannot send custom headers. Set `CRON_SECRET`
+and the routes accept it; both variables may coexist.
 
-On **Vercel Pro** you can drop the external service and create `vercel.json`:
+On **Hobby**, delete `vercel.json` (its `*/15` schedule is rejected at deploy
+time) and schedule the same three URLs at [cron-job.org](https://cron-job.org)
+instead — each `GET`, carrying your secret: `CRON_SECRET` pairs with
+`Authorization: Bearer <value>`, `AUTOMATION_CRON_SECRET` with
+`x-cron-secret: <value>`. `/api/health` prints the exact line.
 
-```json
-{
-  "crons": [
-    { "path": "/api/cron/tick",  "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/daily", "schedule": "0 3 * * *" }
-  ]
-}
-```
+Every sweep is idempotent, so running any of them more often than needed —
+or from both schedulers at once — is harmless.
 
-Vercel validates that file against a strict schema and rejects any key it does
-not recognise — including comment-style keys such as `_note`. Keep it to real
-options only, or the deployment fails before it builds.
+Vercel validates `vercel.json` against a strict schema and rejects any key it
+does not recognise — including comment-style keys such as `_note`. Keep it to
+real options only, or the deployment fails before it builds.
 
 ---
 
