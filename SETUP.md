@@ -346,6 +346,24 @@ reminders, automation waits, flow delays, queued broadcasts, snooze wake-ups.
 This one does the Shopify backfill, nightly RFM scoring, segment refresh and
 log pruning. It never sends a message.
 
+### Job 3 — Wasify Shopify sync *(optional but recommended)*
+
+| Field | Value |
+|---|---|
+| Title | `Wasify sync` |
+| URL | `https://YOUR-APP.vercel.app/api/cron/sync` |
+| Schedule | Once an hour |
+| Request method | `GET` |
+| Header | the same header you used for Job 1 |
+
+The cron-safe twin of the **Sync now** button (which cannot be scheduled — it
+needs a signed-in browser). Webhooks already deliver new orders and carts in
+real time; this job is the safety net that re-reconciles anything a missed
+webhook dropped, and it finishes a large store's history import by itself —
+each run continues where the last stopped, so nobody has to keep pressing
+Sync. Sync runs newest-first and skips unchanged rows, so on a quiet hour
+this costs a handful of API reads and writes nothing.
+
 ### Checking it works
 
 A successful run returns `200` with a body like:

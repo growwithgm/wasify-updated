@@ -31,6 +31,7 @@ the exact line to paste.
 | Schedule | URL | What it does |
 |---|---|---|
 | every 15 min | `/api/cron/tick` | COD reminders, cart-recovery sends, automation waits, flow delays, queued broadcasts, snooze wake-ups |
+| hourly *(optional)* | `/api/cron/sync` | Shopify reconciliation — the schedulable twin of "Sync now"; resumes a large history import on its own |
 | daily 03:00 | `/api/cron/daily` | Shopify backfill, RFM scoring, segment refresh, log pruning |
 
 Every sweep is idempotent, so running either more often than needed is harmless.

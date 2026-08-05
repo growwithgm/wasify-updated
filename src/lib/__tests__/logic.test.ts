@@ -1208,6 +1208,18 @@ describe('shopify graphql backfill', () => {
     }
   })
 
+  it('exposes a cron-safe sync route, guarded by the cron secret', () => {
+    // The manual Sync button authenticates with a browser session, which a
+    // scheduler does not have. The cron twin must gate on the cron secret —
+    // an unguarded version would let anyone with the URL drain the Shopify
+    // API quota on the merchant's behalf.
+    const route = readFileSync(join(process.cwd(), 'src/app/api/cron/sync/route.ts'), 'utf8')
+    expect(route).toContain('isAuthorizedCron')
+    expect(route).toContain('cronUnauthorizedBody')
+    expect(route).toContain('syncStore')
+    expect(route).toContain('maxDuration = 60') // Hobby cap
+  })
+
   it('walks newest-first, so the first click lands the latest data', () => {
     // Oldest-first spent the whole budget on May while the merchant stared
     // at an empty "today". Newest-first + skip-unchanged means each run
