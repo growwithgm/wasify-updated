@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { safeEqual } from '@/lib/crypto'
 import { sendWhatsApp, resolveApprovedTemplate } from '@/lib/whatsapp/send'
 import { templateShape, paramMismatch } from '@/lib/whatsapp/template-params'
 import { findOrCreateContact, findOrCreateConversation } from '@/lib/contacts'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { siteUrlStatus } from '@/lib/site-url'
-import { makeCode, toMetaPhone, formatOrderTotal } from '@/lib/flow/order-confirmation'
+import { flowAuthOk, makeCode, toMetaPhone, formatOrderTotal } from '@/lib/flow/order-confirmation'
+import { numericId } from '@/lib/shopify/sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,9 +33,14 @@ export async function POST(request: Request) {
     return new NextResponse('FLOW_SECRET is not configured', { status: 503 })
   }
 
-  const auth = request.headers.get('authorization') ?? ''
-  if (!auth.startsWith('Bearer ') || !safeEqual(auth.slice(7), secret)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!flowAuthOk(request.headers.get('authorization'), secret)) {
+    return NextResponse.json(
+      {
+        error: 'Unauthorized',
+        hint: 'The Authorization header must carry FLOW_SECRET — either "Bearer <secret>" or the bare secret.',
+      },
+      { status: 401 }
+    )
   }
 
   let body: {
@@ -55,7 +60,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const orderId = body.order_id != null ? String(body.order_id) : ''
+  // Flow's {{ order.id }} arrives as "gid://shopify/Order/123…". Normalise to
+  // the numeric id so the (shop, order_id) dedupe cannot split on which
+  // variable the workflow happened to use.
+  const orderId = body.order_id != null ? numericId(String(body.order_id)) : ''
   const shop = normalizeShopDomain(body.shop ?? '')
   if (!orderId || !shop || !body.status_url) {
     return NextResponse.json({ error: 'order_id, shop and status_url are required' }, { status: 400 })

@@ -1218,7 +1218,12 @@ function FeatureModal({
           <TemplateSelect field="orderconf_template" label="Template" />
           <div className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
             The template must have <b>three body variables</b> — {'{{1}}'} first name, {'{{2}}'} order
-            number, {'{{3}}'} total — and a <b>Dynamic URL button</b> for the track-order link.
+            number, {'{{3}}'} total — and a <b>Dynamic URL button</b> whose base URL is{' '}
+            <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+              {typeof window !== 'undefined' ? window.location.origin : ''}/o/{'{{1}}'}
+            </code>{' '}
+            — <b>this app&apos;s domain</b>, not your store&apos;s. The button carries a short tracking
+            code that only exists here; pointed at the store it lands on a 404.
           </div>
 
           <div

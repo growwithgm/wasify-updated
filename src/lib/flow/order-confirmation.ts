@@ -1,5 +1,19 @@
 import { customAlphabet } from 'nanoid'
 import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js'
+import { safeEqual } from '@/lib/crypto'
+
+/**
+ * Bearer check that also accepts the bare secret. Shopify Flow's header
+ * field is free text, and pasting the value without typing "Bearer " in
+ * front is the most common mistake — the two shapes are equally secret,
+ * so rejecting one only manufactures 401s.
+ */
+export function flowAuthOk(header: string | null | undefined, secret: string): boolean {
+  const value = (header ?? '').trim()
+  if (!value) return false
+  const token = value.startsWith('Bearer ') ? value.slice(7) : value
+  return safeEqual(token, secret)
+}
 
 /**
  * Helpers for the Shopify Flow → WhatsApp order confirmation.

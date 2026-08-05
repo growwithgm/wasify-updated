@@ -16,7 +16,7 @@ import { rowTagNames } from '@/app/api/contacts/import/route'
 import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
-import { makeCode, isValidCode, toMetaPhone, formatOrderTotal } from '@/lib/flow/order-confirmation'
+import { makeCode, isValidCode, toMetaPhone, formatOrderTotal, flowAuthOk } from '@/lib/flow/order-confirmation'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -301,10 +301,22 @@ describe('order confirmation flow', () => {
     expect(isValidCode('short')).toBe(false)
   })
 
+  it('accepts the secret with or without the Bearer prefix', () => {
+    // Shopify Flow's header field is free text; pasting the value without
+    // typing "Bearer " is the most common mistake, and both shapes carry the
+    // identical secret — rejecting one only manufactures 401 retry loops.
+    expect(flowAuthOk('Bearer s3cret', 's3cret')).toBe(true)
+    expect(flowAuthOk('s3cret', 's3cret')).toBe(true)
+    expect(flowAuthOk(' s3cret ', 's3cret')).toBe(true) // stray whitespace
+    expect(flowAuthOk('Bearer wrong', 's3cret')).toBe(false)
+    expect(flowAuthOk('', 's3cret')).toBe(false)
+    expect(flowAuthOk(null, 's3cret')).toBe(false)
+  })
+
   it('keeps the endpoint fail-closed and the redirect public', () => {
     const route = readFileSync(join(process.cwd(), 'src/app/api/flow/order-confirmation/route.ts'), 'utf8')
     expect(route).toContain('FLOW_SECRET')
-    expect(route).toContain('safeEqual') // timing-safe, like the cron routes
+    expect(route).toContain('flowAuthOk') // timing-safe via safeEqual inside
     expect(route).toContain("'23505'") // duplicate order → skipped, not error
     // The short-link redirect and the Flow endpoint must be reachable
     // without a session, or the button 302s to the login page.
