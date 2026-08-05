@@ -1194,6 +1194,21 @@ describe('shopify graphql backfill', () => {
     expect(extractShopifyPhone(payload)).toBe('34600123456')
   })
 
+  it('stays inside the serverless time budget and reports partial progress', () => {
+    // Vercel Hobby kills a function at 60s. A long history must stop early,
+    // say so, and resume from a watermark next run — not die mid-request
+    // with "Last sync: never" and a success spinner.
+    const sync = readFileSync(join(process.cwd(), 'src/lib/shopify/sync.ts'), 'utf8')
+    expect(sync).toContain('deadline')
+    expect(sync).toMatch(/partial/)
+    expect(sync).toMatch(/watermark/)
+    // Both UIs must tell the merchant to press Sync again rather than
+    // presenting a partial import as the whole story.
+    for (const file of ['src/app/(app)/integrations/page.tsx', 'src/app/(app)/catalog/page.tsx']) {
+      expect(readFileSync(join(process.cwd(), file), 'utf8')).toContain('press Sync again')
+    }
+  })
+
   it('reshapes an abandoned checkout, keeping the recovery link and locale', () => {
     const payload = checkoutNodeToPayload({
       id: 'gid://shopify/AbandonedCheckout/69328815489397',

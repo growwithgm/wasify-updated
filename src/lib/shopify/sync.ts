@@ -28,6 +28,8 @@ export type SyncResult = {
   checkouts: number
   products: number
   errors: string[]
+  /** True when the time budget ran out before the history was exhausted. */
+  partial: boolean
 }
 
 const ORDERS_QUERY = `
@@ -178,19 +180,31 @@ export function checkoutNodeToPayload(node: any): any {
   }
 }
 
-/** Walk a GraphQL connection, one page at a time, up to `maxPages`. */
+/**
+ * Walk a GraphQL connection, one page at a time, up to `maxPages` or until
+ * the deadline passes.
+ *
+ * The deadline exists because Vercel Hobby kills a function at 60 seconds.
+ * Without it, a store with a long history dies mid-sync: the request is
+ * terminated, nothing records how far it got, and "Last sync: never" sits
+ * next to a spinner that ran for a full minute. Stopping short is fine —
+ * every resource resumes from a watermark on the next run.
+ */
 async function paginate(
   config: ShopifyConfig & { token: string },
   query: string,
   field: string,
   variables: Record<string, unknown>,
   maxPages: number,
+  deadline: number,
   onNode: (node: any) => Promise<void>
-): Promise<{ count: number; error?: string }> {
+): Promise<{ count: number; error?: string; ranOut?: boolean }> {
   let cursor: string | null = null
   let count = 0
 
   for (let page = 0; page < maxPages; page++) {
+    if (Date.now() > deadline) return { count, ranOut: true }
+
     const res: Awaited<ReturnType<typeof adminGraphql<any>>> = await adminGraphql<any>(
       config.store_domain,
       config.token,
@@ -214,63 +228,72 @@ async function paginate(
   return { count }
 }
 
+/**
+ * Where to resume a resource: the newest Shopify timestamp already mirrored.
+ *
+ * Both connections are walked oldest-first, so everything before the max we
+ * hold is already stored, and re-reading the boundary day is harmless — every
+ * write is an idempotent upsert. Falls back to the requested window on an
+ * empty table. Derived from the data rather than kept as a stored cursor, so
+ * it can never point somewhere the data is not.
+ */
+async function watermark(db: any, userId: string, table: string, floor: string): Promise<string> {
+  const { data } = await db
+    .from(table)
+    .select('shopify_created_at')
+    .eq('user_id', userId)
+    .not('shopify_created_at', 'is', null)
+    .order('shopify_created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const newest = data?.shopify_created_at ? String(data.shopify_created_at).slice(0, 10) : null
+  return newest && newest > floor ? newest : floor
+}
+
 export async function syncStore(
   db: any,
   config: ShopifyConfig & { token: string },
-  opts: { maxPages?: number; sinceDays?: number } = {}
+  opts: { maxPages?: number; sinceDays?: number; budgetMs?: number } = {}
 ): Promise<SyncResult> {
   const maxPages = opts.maxPages ?? 8
   const sinceDays = opts.sinceDays ?? 90
-  const since = new Date(Date.now() - sinceDays * 86400_000).toISOString().slice(0, 10)
+  const floor = new Date(Date.now() - sinceDays * 86400_000).toISOString().slice(0, 10)
+  // Stop comfortably before Vercel Hobby's 60-second kill, leaving room for
+  // the roll-ups and the bookkeeping write after the loops.
+  const deadline = Date.now() + (opts.budgetMs ?? 45_000)
 
-  const result: SyncResult = { orders: 0, checkouts: 0, products: 0, errors: [] }
+  const result: SyncResult = { orders: 0, checkouts: 0, products: 0, errors: [], partial: false }
   const touchedContacts = new Set<string>()
 
-  /* ------------------------------ orders ------------------------------ */
-  try {
-    const { count, error } = await paginate(
-      config,
-      ORDERS_QUERY,
-      'orders',
-      { query: `created_at:>=${since}` },
-      maxPages,
-      async (node) => {
-        const payload = orderNodeToPayload(node)
-        payload.__store_domain = config.store_domain
-        const row = await upsertOrderFromWebhook(db, config.user_id, payload, 'backfill')
-        if (row?.contact_id) touchedContacts.add(row.contact_id)
-      }
-    )
-    result.orders = count
-    if (error) result.errors.push(`orders: ${error}`)
-  } catch (e: any) {
-    result.errors.push(`orders: ${e?.message ?? e}`)
-  }
-
-  /* ---------------------------- checkouts ----------------------------- */
-  try {
-    const { count, error } = await paginate(
-      config,
-      CHECKOUTS_QUERY,
-      'abandonedCheckouts',
-      { query: `created_at:>=${since}` },
-      maxPages,
-      async (node) => {
-        await upsertCheckoutFromWebhook(db, config.user_id, checkoutNodeToPayload(node), 'backfill')
-      }
-    )
-    result.checkouts = count
-    if (error) result.errors.push(`abandoned checkouts: ${error}`)
-  } catch (e: any) {
-    result.errors.push(`abandoned checkouts: ${e?.message ?? e}`)
-  }
-
   /* ----------------------------- products ----------------------------- */
+  // Products first and in ONE batched write per page: they are what the
+  // Catalog screen and recovery discounts need, and per-row writes were the
+  // main reason a big store never fit inside the time budget.
   try {
-    const { count, error } = await paginate(config, PRODUCTS_QUERY, 'products', {}, maxPages, async (node) => {
-      const variant = node.variants?.nodes?.[0] ?? {}
-      const { error: writeError } = await db.from('shopify_products').upsert(
-        {
+    // Not paginate(): products are written one PAGE per upsert, not one row,
+    // which is what lets a full catalog land inside the time budget.
+    let cursor: string | null = null
+    let total = 0
+    for (let page = 0; page < maxPages; page++) {
+      if (Date.now() > deadline) {
+        result.partial = true
+        break
+      }
+      const res: Awaited<ReturnType<typeof adminGraphql<any>>> = await adminGraphql<any>(
+        config.store_domain,
+        config.token,
+        PRODUCTS_QUERY,
+        { cursor }
+      )
+      if (!res.ok) {
+        result.errors.push(`products: ${res.error}`)
+        break
+      }
+      const connection: any = res.data?.products
+      const rows = (connection?.nodes ?? []).map((node: any) => {
+        const variant = node.variants?.nodes?.[0] ?? {}
+        return {
           user_id: config.user_id,
           shopify_product_id: numericId(node.id),
           title: node.title,
@@ -285,17 +308,70 @@ export async function syncStore(
           status: (node.status ?? '').toLowerCase() || null,
           catalog_sync_status: String(node.status).toUpperCase() === 'ACTIVE' ? 'synced' : 'excluded',
           synced_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id,shopify_product_id' }
-      )
-      // Unchecked, this loop reported "synced N products" while every single
-      // write failed — which is precisely how an empty catalog looked healthy.
-      if (writeError) throw new Error(writeError.message)
-    })
-    result.products = count
-    if (error) result.errors.push(`products: ${error}`)
+        }
+      })
+      if (rows.length) {
+        const { error: writeError } = await db
+          .from('shopify_products')
+          .upsert(rows, { onConflict: 'user_id,shopify_product_id' })
+        // Unchecked, this reported "synced N products" while every write
+        // failed — which is precisely how an empty catalog looked healthy.
+        if (writeError) throw new Error(writeError.message)
+        total += rows.length
+      }
+      if (!connection?.pageInfo?.hasNextPage) break
+      cursor = connection.pageInfo.endCursor
+    }
+    result.products = total
   } catch (e: any) {
     result.errors.push(`products: ${e?.message ?? e}`)
+  }
+
+  /* ---------------------------- checkouts ----------------------------- */
+  // Before orders: carts are the feature the merchant is usually waiting on,
+  // and the smaller of the two order-shaped datasets.
+  try {
+    const since = await watermark(db, config.user_id, 'shopify_checkouts', floor)
+    const { count, error, ranOut } = await paginate(
+      config,
+      CHECKOUTS_QUERY,
+      'abandonedCheckouts',
+      { query: `created_at:>=${since}` },
+      maxPages,
+      deadline,
+      async (node) => {
+        await upsertCheckoutFromWebhook(db, config.user_id, checkoutNodeToPayload(node), 'backfill')
+      }
+    )
+    result.checkouts = count
+    if (ranOut) result.partial = true
+    if (error) result.errors.push(`abandoned checkouts: ${error}`)
+  } catch (e: any) {
+    result.errors.push(`abandoned checkouts: ${e?.message ?? e}`)
+  }
+
+  /* ------------------------------ orders ------------------------------ */
+  try {
+    const since = await watermark(db, config.user_id, 'shopify_orders', floor)
+    const { count, error, ranOut } = await paginate(
+      config,
+      ORDERS_QUERY,
+      'orders',
+      { query: `created_at:>=${since}` },
+      maxPages,
+      deadline,
+      async (node) => {
+        const payload = orderNodeToPayload(node)
+        payload.__store_domain = config.store_domain
+        const row = await upsertOrderFromWebhook(db, config.user_id, payload, 'backfill')
+        if (row?.contact_id) touchedContacts.add(row.contact_id)
+      }
+    )
+    result.orders = count
+    if (ranOut) result.partial = true
+    if (error) result.errors.push(`orders: ${error}`)
+  } catch (e: any) {
+    result.errors.push(`orders: ${e?.message ?? e}`)
   }
 
   /* --------------------------- roll-ups ------------------------------- */

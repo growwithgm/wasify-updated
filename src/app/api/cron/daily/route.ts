@@ -37,7 +37,10 @@ export async function GET(request: Request) {
     try {
       const config = await getShopifyConfig(tenant.user_id)
       if (!config) continue
-      await syncStore(db, config, { maxPages: 4, sinceDays: 30 })
+      // A tight budget: the daily run also does RFM, segments and pruning
+      // inside the same 60-second function. Watermarks make the next day's
+      // run pick up wherever this one stops.
+      await syncStore(db, config, { maxPages: 4, sinceDays: 30, budgetMs: 25_000 })
       synced++
     } catch (e: any) {
       errors.push(`sync ${tenant.user_id}: ${e?.message ?? e}`)

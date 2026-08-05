@@ -54,7 +54,8 @@ function CatalogScreen() {
           ? json.error
           : json.errors?.length
             ? json.errors.join(' · ')
-            : `Synced ${json.products} products, ${json.orders} orders, ${json.checkouts} carts`,
+            : `Synced ${json.products} products, ${json.orders} orders, ${json.checkouts} carts` +
+              (json.partial ? ' — more history remains, press Sync again to continue' : ''),
         res.ok && !json.errors?.length ? 'green' : 'red'
       )
       load()

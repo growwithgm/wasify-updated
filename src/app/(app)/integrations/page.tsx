@@ -271,7 +271,8 @@ function IntegrationsScreen() {
                             ? json.error
                             : json.errors?.length
                               ? json.errors.join(' · ')
-                              : `Synced ${json.orders} orders, ${json.checkouts} carts, ${json.products} products`,
+                              : `Synced ${json.orders} orders, ${json.checkouts} carts, ${json.products} products` +
+                                (json.partial ? ' — more history remains, press Sync again to continue' : ''),
                           res.ok && !json.errors?.length ? 'green' : 'red'
                         )
                         setBusy('')
