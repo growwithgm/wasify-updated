@@ -28,6 +28,10 @@ export async function GET(request: Request) {
         'id, shopify_checkout_id, customer_name, customer_phone, customer_email, total_price, currency, items_count, line_items, abandoned_checkout_url, completed_at, recovered, abandoned_at, created_at, contact_id',
         { count: 'exact' }
       )
+      // When the CART was abandoned, not when the row was inserted — a
+      // backfill writes old carts last, and insert-order put three-week-old
+      // carts above ones from this afternoon.
+      .order('abandoned_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
 
     if (filter === 'open') query = query.is('completed_at', null).eq('recovered', false)

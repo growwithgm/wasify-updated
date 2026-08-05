@@ -1196,17 +1196,30 @@ describe('shopify graphql backfill', () => {
 
   it('stays inside the serverless time budget and reports partial progress', () => {
     // Vercel Hobby kills a function at 60s. A long history must stop early,
-    // say so, and resume from a watermark next run — not die mid-request
-    // with "Last sync: never" and a success spinner.
+    // say so, and make progress across runs — not die mid-request with
+    // "Last sync: never" and a success spinner.
     const sync = readFileSync(join(process.cwd(), 'src/lib/shopify/sync.ts'), 'utf8')
     expect(sync).toContain('deadline')
     expect(sync).toMatch(/partial/)
-    expect(sync).toMatch(/watermark/)
     // Both UIs must tell the merchant to press Sync again rather than
     // presenting a partial import as the whole story.
     for (const file of ['src/app/(app)/integrations/page.tsx', 'src/app/(app)/catalog/page.tsx']) {
       expect(readFileSync(join(process.cwd(), file), 'utf8')).toContain('press Sync again')
     }
+  })
+
+  it('walks newest-first, so the first click lands the latest data', () => {
+    // Oldest-first spent the whole budget on May while the merchant stared
+    // at an empty "today". Newest-first + skip-unchanged means each run
+    // races through what it already holds and spends its time on new rows.
+    const sync = readFileSync(join(process.cwd(), 'src/lib/shopify/sync.ts'), 'utf8')
+    expect(sync.match(/reverse: true/g)?.length).toBe(3) // orders, checkouts, products
+    expect(sync).toContain('changedNodes')
+
+    // The carts page must sort by when the cart was ABANDONED — insert order
+    // put three-week-old backfill rows above this afternoon's carts.
+    const carts = readFileSync(join(process.cwd(), 'src/app/api/carts/route.ts'), 'utf8')
+    expect(carts).toMatch(/order\('abandoned_at'/)
   })
 
   it('reshapes an abandoned checkout, keeping the recovery link and locale', () => {

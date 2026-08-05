@@ -911,10 +911,16 @@ create table if not exists public.shopify_orders (
   -- 'webhook' rows may trigger messaging; 'backfill' rows NEVER may.
   source               text not null default 'webhook',
   shopify_created_at   timestamptz,
+  -- Shopify's own updated_at: the backfill compares it to skip rows that have
+  -- not changed, which is what lets repeated syncs walk deeper each run.
+  shopify_updated_at   timestamptz,
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now(),
   unique (user_id, shopify_order_id)
 );
+
+-- Added after the first release; keeps an existing database in step.
+alter table public.shopify_orders add column if not exists shopify_updated_at timestamptz;
 
 create index if not exists shopify_orders_user_idx    on public.shopify_orders(user_id, shopify_created_at desc);
 create index if not exists shopify_orders_contact_idx on public.shopify_orders(contact_id);

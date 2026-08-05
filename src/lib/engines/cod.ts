@@ -448,6 +448,7 @@ export async function upsertOrderFromWebhook(
     cancelled_at: payload.cancelled_at ?? null,
     source,
     shopify_created_at: payload.created_at ?? null,
+    shopify_updated_at: payload.updated_at ?? null,
   }
 
   const { data, error } = await db
