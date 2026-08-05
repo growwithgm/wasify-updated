@@ -28,6 +28,37 @@ const STAGE_COLUMNS = ['reminder1_sent_at', 'reminder2_sent_at', 'reminder3_sent
  */
 export const MAX_SEND_ATTEMPTS = 5
 
+/** Sequences only ever START for a cart younger than this, unless configured. */
+export const DEFAULT_MAX_AGE_HOURS = 24
+
+/**
+ * When the CART was abandoned — the moment every reminder delay is measured
+ * from. The tracking row's own created_at is only a last resort: a backfill
+ * creates rows months after the fact, and measuring from row creation is what
+ * made a five-month-old checkout look 60 minutes old and get "you left
+ * something behind" today.
+ */
+export function recoveryAnchor(checkout: any, row: any): string {
+  return checkout?.abandoned_at ?? checkout?.shopify_created_at ?? row?.created_at
+}
+
+/**
+ * True when this cart is too old for a sequence to START. Applies only before
+ * the first reminder: a sequence already in flight finishes its ladder even
+ * past the window — reminder 3 at 48h is the design, not a leak.
+ */
+export function tooOldToStart(
+  anchorIso: string | null | undefined,
+  remindersSent: number,
+  maxAgeHours: number,
+  nowMs: number = Date.now()
+): boolean {
+  if (remindersSent > 0) return false
+  if (!anchorIso) return true // no way to know its age — never guess and message
+  const ageHours = (nowMs - new Date(anchorIso).getTime()) / 3_600_000
+  return ageHours > maxAgeHours
+}
+
 /**
  * What to write after attempting one reminder.
  *
@@ -109,8 +140,25 @@ export async function ensureCheckoutRecovery(db: any, userId: string, checkoutRo
     return
   }
 
-  // Cooldown: don't chase the same person twice in N days.
   const config = await getShopifyConfig(userId)
+
+  // A cart already outside the freshness window gets its row for history —
+  // the carts page shows it — but never joins the active pool. This is what
+  // lets the backfill import months of checkouts without messaging any.
+  const maxAgeHours = config?.recovery_max_age_hours ?? DEFAULT_MAX_AGE_HOURS
+  if (tooOldToStart(recoveryAnchor(checkoutRow, null), 0, maxAgeHours)) {
+    await db.from('checkout_recoveries').insert({
+      user_id: userId,
+      shopify_checkout_id: shopifyCheckoutId,
+      checkout_row_id: checkoutRow.id,
+      contact_id: checkoutRow.contact_id,
+      phone,
+      status: 'skipped_too_old',
+    })
+    return
+  }
+
+  // Cooldown: don't chase the same person twice in N days.
   const cooldownDays = config?.recovery_cooldown_days ?? 7
 
   if (cooldownDays > 0) {
@@ -210,7 +258,23 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
           continue
         }
 
-        const ageMinutes = (Date.now() - new Date(row.created_at).getTime()) / 60_000
+        // Age is the CART's, never the tracking row's, and a sequence that
+        // has not started yet only starts inside the freshness window.
+        const anchor = recoveryAnchor(checkout, row)
+        const maxAgeHours = config.recovery_max_age_hours ?? DEFAULT_MAX_AGE_HOURS
+
+        if (tooOldToStart(anchor, row.reminders_sent ?? 0, maxAgeHours)) {
+          await db
+            .from('checkout_recoveries')
+            .update({
+              status: 'skipped_too_old',
+              last_error: `Cart was already ${Math.round((Date.now() - new Date(anchor).getTime()) / 3_600_000)}h old — over the ${maxAgeHours}h limit`,
+            })
+            .eq('id', row.id)
+          continue
+        }
+
+        const ageMinutes = (Date.now() - new Date(anchor).getTime()) / 60_000
 
         // Highest DUE stage fires once — never a burst of three.
         let stage = 0

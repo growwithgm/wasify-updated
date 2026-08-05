@@ -6,7 +6,7 @@ import { sanitizePhone, isValidPhone, phonesMatch, phoneVariants, extractShopify
 import { sessionWindow, canSendFreeText, appendMessage, WINDOW_MS } from '@/lib/window'
 import { normalize, matchesKeyword } from '@/lib/engines/types'
 import { isCodOrder, buildOrderVars } from '@/lib/engines/cod'
-import { urlSuffix, reminderPatch, MAX_SEND_ATTEMPTS } from '@/lib/engines/recovery'
+import { urlSuffix, reminderPatch, MAX_SEND_ATTEMPTS, recoveryAnchor, tooOldToStart } from '@/lib/engines/recovery'
 import { matchesDefinition, rfmLabel } from '@/lib/engines/segments'
 import { bestFaq } from '@/lib/engines/chatbot'
 import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
@@ -259,6 +259,44 @@ describe('carts page recovery label', () => {
   it('flags a missing number even before a tracking row exists', () => {
     expect(recoveryLabel(null, false).text).toMatch(/number missing/)
     expect(recoveryLabel(null, true).text).toBe('No recovery yet')
+  })
+})
+
+describe('recovery freshness window', () => {
+  const now = Date.parse('2026-08-05T12:00:00Z')
+  const hoursAgo = (h: number) => new Date(now - h * 3_600_000).toISOString()
+
+  it('measures age from the CART, never from the tracking row', () => {
+    // The bug this exists for: a backfill created the tracking row today for
+    // a checkout abandoned in March, the sweep measured age from row
+    // creation, and a five-month-old cart got "you left something behind".
+    const checkout = { abandoned_at: '2026-03-01T10:00:00Z', shopify_created_at: '2026-03-01T10:00:00Z' }
+    const row = { created_at: hoursAgo(0.05) } // inserted 3 minutes ago
+    expect(recoveryAnchor(checkout, row)).toBe('2026-03-01T10:00:00Z')
+    expect(tooOldToStart(recoveryAnchor(checkout, row), 0, 24, now)).toBe(true)
+  })
+
+  it('lets a fresh cart start, and blocks one just past the window', () => {
+    expect(tooOldToStart(hoursAgo(2), 0, 24, now)).toBe(false)
+    expect(tooOldToStart(hoursAgo(23.9), 0, 24, now)).toBe(false)
+    expect(tooOldToStart(hoursAgo(24.1), 0, 24, now)).toBe(true)
+  })
+
+  it('never interrupts a sequence already in flight', () => {
+    // Reminder 3 fires at 48h BY DESIGN — the window gates starting, not
+    // finishing. A cart messaged at hour 2 still gets its full ladder.
+    expect(tooOldToStart(hoursAgo(30), 1, 24, now)).toBe(false)
+    expect(tooOldToStart(hoursAgo(50), 2, 24, now)).toBe(false)
+  })
+
+  it('refuses to guess when the age is unknowable', () => {
+    expect(tooOldToStart(null, 0, 24, now)).toBe(true)
+    expect(tooOldToStart(undefined, 0, 24, now)).toBe(true)
+  })
+
+  it('honours a merchant-configured window', () => {
+    expect(tooOldToStart(hoursAgo(30), 0, 48, now)).toBe(false) // 48h configured
+    expect(tooOldToStart(hoursAgo(5), 0, 4, now)).toBe(true) // 4h configured
   })
 })
 

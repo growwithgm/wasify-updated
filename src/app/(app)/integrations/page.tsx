@@ -1291,6 +1291,13 @@ function FeatureModal({
               onChange={(e) => set('recovery_cooldown_days', Number(e.target.value))}
               hint="Skip repeat chasing"
             />
+            <Input
+              label="Max cart age (hours)"
+              type="number"
+              value={String(form.recovery_max_age_hours ?? 24)}
+              onChange={(e) => set('recovery_max_age_hours', Number(e.target.value))}
+              hint="Older carts are never messaged"
+            />
           </div>
 
           {[1, 2, 3].map((n) => (

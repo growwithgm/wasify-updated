@@ -862,6 +862,10 @@ create table if not exists public.shopify_config (
   recovery_delay2_minutes     integer not null default 1440,
   recovery_delay3_minutes     integer not null default 2880,
   recovery_cooldown_days      integer not null default 7,
+  -- A recovery sequence only ever STARTS for a cart younger than this. The
+  -- guard that stops a backfill from messaging months-old checkouts: their
+  -- tracking rows are created for history, but marked skipped_too_old.
+  recovery_max_age_hours      integer not null default 24,
   recovery_stop_keywords      text[] not null default array['stop','baja','parar','unsubscribe'],
 
   recovery_r1_template_es     text,
@@ -921,6 +925,7 @@ create table if not exists public.shopify_orders (
 
 -- Added after the first release; keeps an existing database in step.
 alter table public.shopify_orders add column if not exists shopify_updated_at timestamptz;
+alter table public.shopify_config add column if not exists recovery_max_age_hours integer not null default 24;
 
 create index if not exists shopify_orders_user_idx    on public.shopify_orders(user_id, shopify_created_at desc);
 create index if not exists shopify_orders_contact_idx on public.shopify_orders(contact_id);
@@ -1089,7 +1094,8 @@ create table if not exists public.checkout_recoveries (
   phone                 text,
 
   status                text not null default 'active',
-  -- active | done | completed_order | skipped_no_phone | suppressed_cooldown | opted_out | failed
+  -- active | done | completed_order | skipped_no_phone | suppressed_cooldown
+  -- | skipped_too_old | opted_out | failed
 
   reminders_sent        integer not null default 0,   -- 0..3
   reminder1_sent_at     timestamptz,

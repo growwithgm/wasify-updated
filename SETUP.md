@@ -478,6 +478,14 @@ Webhooks are registered automatically on the way back. Then:
 
 Both stay off until you enable them, so nothing is sent by accident.
 
+**Turning recovery on will not blast your history.** A sequence only ever
+*starts* for a cart younger than **Max cart age** (default 24 hours) — older
+checkouts imported by the sync are marked *Too old — not messaged* on the
+carts page and stay that way. Once a fresh cart's first reminder has been
+sent, its later reminders follow your delays normally, even past the window —
+reminder 3 at 48 hours is the design. The age is always measured from when
+the customer abandoned the cart, never from when the data reached Wasify.
+
 ### Building the cart-recovery template in Meta
 
 One rule matters more than the rest: **the button URL type must be `Dynamic`,
