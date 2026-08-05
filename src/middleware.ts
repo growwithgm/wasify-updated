@@ -15,6 +15,8 @@ const PUBLIC_APIS = [
   '/api/shopify/callback',
   '/api/cron/',
   '/api/health',
+  '/api/flow/', // Shopify Flow calls in with its own bearer secret
+  '/o/', // order-confirmation short links — customers have no session
 ]
 
 export async function middleware(request: NextRequest) {

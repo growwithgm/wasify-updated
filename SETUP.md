@@ -478,6 +478,42 @@ Webhooks are registered automatically on the way back. Then:
 
 Both stay off until you enable them, so nothing is sent by accident.
 
+### Order confirmation via Shopify Flow *(optional)*
+
+A WhatsApp confirmation with a track-your-order button on every new order,
+fired by Shopify Flow rather than a webhook.
+
+1. **Vercel** → add `FLOW_SECRET` (`openssl rand -hex 24`), redeploy.
+2. **Meta** → create a template with three body variables ({{1}} first name,
+   {{2}} order number, {{3}} total) and a **Dynamic URL** button whose base is
+   `https://YOUR-APP.vercel.app/o/{{1}}`. Default name: `order_confirmation_es`.
+3. **Wasify** → Integrations → **Order confirmation (Shopify Flow)** →
+   Configure → enable it and pick the template.
+4. **Shopify admin** → **Flow → Create workflow**:
+   - Trigger: **Order created**
+   - Action: **Send HTTP request** — method `POST`, URL
+     `https://YOUR-APP.vercel.app/api/flow/order-confirmation`, header
+     `Authorization: Bearer <FLOW_SECRET>`, body:
+
+   ```json
+   {
+     "order_id": "{{ order.legacyResourceId }}",
+     "order_name": "{{ order.name }}",
+     "first_name": "{{ order.customer.firstName }}",
+     "phone": "{{ order.customer.phone | default: order.billingAddress.phone }}",
+     "total": "{{ order.totalPriceSet.shopMoney.amount }}",
+     "currency": "{{ order.totalPriceSet.shopMoney.currencyCode }}",
+     "status_url": "{{ order.statusPageUrl }}",
+     "shop": "{{ shop.myshopifyDomain }}",
+     "country_code": "{{ order.billingAddress.countryCode }}"
+   }
+   ```
+
+The endpoint answers `200` with a `skipped` reason for anything a retry cannot
+fix — invalid phone, duplicate order, feature off — so Flow never retry-storms.
+One link per order (`UNIQUE (shop, order_id)`), and `/o/<code>` records the
+click before redirecting to the order status page.
+
 **Turning recovery on will not blast your history.** A sequence only ever
 *starts* for a cart younger than **Max cart age** (default 24 hours) — older
 checkouts imported by the sync are marked *Too old — not messaged* on the

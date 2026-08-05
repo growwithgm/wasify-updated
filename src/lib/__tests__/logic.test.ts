@@ -16,6 +16,7 @@ import { rowTagNames } from '@/app/api/contacts/import/route'
 import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
+import { makeCode, isValidCode, toMetaPhone, formatOrderTotal } from '@/lib/flow/order-confirmation'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -259,6 +260,57 @@ describe('carts page recovery label', () => {
   it('flags a missing number even before a tracking row exists', () => {
     expect(recoveryLabel(null, false).text).toMatch(/number missing/)
     expect(recoveryLabel(null, true).text).toBe('No recovery yet')
+  })
+})
+
+describe('order confirmation flow', () => {
+  it('formats the total in the currency\'s own convention', () => {
+    expect(formatOrderTotal(48.9, 'EUR')).toBe('€48,90') // comma decimal
+    expect(formatOrderTotal('48.9', 'eur')).toBe('€48,90')
+    expect(formatOrderTotal(48.9, 'GBP')).toBe('£48.90')
+    expect(formatOrderTotal(48.9, 'USD')).toBe('$48.90')
+    expect(formatOrderTotal(48.9, 'AED')).toBe('48.90 AED') // unknown → suffix
+    expect(formatOrderTotal(null, null)).toBe('€0,00')
+  })
+
+  it('normalises phones to digits-only E.164 with the order\'s country', () => {
+    // Meta wants no plus sign.
+    expect(toMetaPhone('+34 600 123 456')).toBe('34600123456')
+    expect(toMetaPhone('600 123 456', 'ES')).toBe('34600123456') // national + region
+    expect(toMetaPhone('07429 917026', 'GB')).toBe('447429917026') // trunk 0 dropped
+    expect(toMetaPhone('600123456')).toBe('34600123456') // no region → ES fallback
+  })
+
+  it('returns null for an invalid phone instead of throwing', () => {
+    // The route answers 200 { skipped } — an error would make Shopify Flow
+    // retry a phone that will be exactly as invalid the fifth time.
+    expect(toMetaPhone('12')).toBeNull()
+    expect(toMetaPhone('')).toBeNull()
+    expect(toMetaPhone(null)).toBeNull()
+    expect(toMetaPhone('not a phone')).toBeNull()
+  })
+
+  it('mints 8-char codes with no lookalike characters', () => {
+    for (let i = 0; i < 50; i++) {
+      const code = makeCode()
+      expect(code).toHaveLength(8)
+      expect(code).toMatch(/^[23456789abcdefghjkmnpqrstuvwxyz]+$/) // no 0/o, 1/l/i
+      expect(isValidCode(code)).toBe(true)
+    }
+    expect(isValidCode('has-0-l1')).toBe(false)
+    expect(isValidCode('short')).toBe(false)
+  })
+
+  it('keeps the endpoint fail-closed and the redirect public', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/api/flow/order-confirmation/route.ts'), 'utf8')
+    expect(route).toContain('FLOW_SECRET')
+    expect(route).toContain('safeEqual') // timing-safe, like the cron routes
+    expect(route).toContain("'23505'") // duplicate order → skipped, not error
+    // The short-link redirect and the Flow endpoint must be reachable
+    // without a session, or the button 302s to the login page.
+    const middleware = readFileSync(join(process.cwd(), 'src/middleware.ts'), 'utf8')
+    expect(middleware).toContain("'/o/'")
+    expect(middleware).toContain("'/api/flow/'")
   })
 })
 

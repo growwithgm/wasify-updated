@@ -1434,6 +1434,28 @@ create policy profiles_self on public.profiles
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
+-- Short links for the order-confirmation WhatsApp button ("/o/<code>").
+-- Written by the Shopify Flow endpoint, read by the public redirect — both
+-- run with the service role, so RLS is on with NO policy (like audit_log).
+create table if not exists public.order_links (
+  code        text primary key,
+  user_id     uuid references auth.users(id) on delete cascade,
+  order_id    text not null,
+  shop        text not null,
+  status_url  text not null,
+  clicked_at  timestamptz,
+  created_at  timestamptz not null default now(),
+  -- One link per order per store: the dedupe Shopify Flow retries rely on.
+  unique (shop, order_id)
+);
+
+alter table public.order_links enable row level security;
+
+-- Per-tenant switch for the Flow-driven order confirmation.
+alter table public.shopify_config add column if not exists orderconf_enabled boolean not null default false;
+alter table public.shopify_config add column if not exists orderconf_template text not null default 'order_confirmation_es';
+alter table public.shopify_config add column if not exists orderconf_language text not null default 'es';
+
 -- audit_log is service-role only: RLS on, and no policy at all means
 -- authenticated clients can never read or write it.
 alter table public.audit_log enable row level security;

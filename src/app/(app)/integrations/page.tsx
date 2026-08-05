@@ -966,7 +966,7 @@ function FeatureConfig({
   onSaved: () => void
 }) {
   const toast = useToast()
-  const [open, setOpen] = useState<'cod' | 'recovery' | null>(null)
+  const [open, setOpen] = useState<'cod' | 'recovery' | 'orderconf' | null>(null)
 
   if (!config?.has_token) return null
 
@@ -1006,6 +1006,26 @@ function FeatureConfig({
           </div>
           <div className="mt-3">
             <Button size="sm" variant="primary" onClick={() => setOpen('recovery')}>
+              Configure
+            </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="text-[14.5px] font-semibold">Order confirmation (Shopify Flow)</div>
+              <div className="mt-1 text-[12px]" style={{ color: 'var(--w-muted)' }}>
+                A WhatsApp confirmation with a track-your-order button, sent by a Shopify Flow calling
+                this app on every new order.
+              </div>
+            </div>
+            <Pill tone={config.orderconf_enabled ? 'green' : 'gray'}>
+              {config.orderconf_enabled ? 'On' : 'Off'}
+            </Pill>
+          </div>
+          <div className="mt-3">
+            <Button size="sm" variant="primary" onClick={() => setOpen('orderconf')}>
               Configure
             </Button>
           </div>
@@ -1057,7 +1077,7 @@ function FeatureModal({
   onClose,
   onSaved,
 }: {
-  kind: 'cod' | 'recovery'
+  kind: 'cod' | 'recovery' | 'orderconf'
   config: any
   templates: Array<{ name: string; language: string }>
   onClose: () => void
@@ -1171,7 +1191,7 @@ function FeatureModal({
     <Modal
       open
       onClose={onClose}
-      title={kind === 'cod' ? 'COD order confirmation' : 'Abandoned cart recovery'}
+      title={kind === 'cod' ? 'COD order confirmation' : kind === 'orderconf' ? 'Order confirmation (Shopify Flow)' : 'Abandoned cart recovery'}
       width={680}
       footer={
         <>
@@ -1182,7 +1202,53 @@ function FeatureModal({
         </>
       }
     >
-      {kind === 'cod' ? (
+      {kind === 'orderconf' ? (
+        <>
+          <label className="mb-4 flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={form.orderconf_enabled ?? false}
+              onChange={(e) => set('orderconf_enabled', e.target.checked)}
+              className="h-4 w-4 cursor-pointer"
+              style={{ accentColor: '#16A34A' }}
+            />
+            <span className="text-[13px] font-medium">Enable order confirmation</span>
+          </label>
+
+          <TemplateSelect field="orderconf_template" label="Template" />
+          <div className="mt-1.5 text-[12px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
+            The template must have <b>three body variables</b> — {'{{1}}'} first name, {'{{2}}'} order
+            number, {'{{3}}'} total — and a <b>Dynamic URL button</b> for the track-order link.
+          </div>
+
+          <div
+            className="mt-4 rounded-[10px] border p-3 text-[12px] leading-relaxed"
+            style={{ background: 'var(--w-card2)', borderColor: 'var(--w-border)' }}
+          >
+            <div className="mb-1 font-semibold">Shopify Flow setup</div>
+            In Shopify admin: <b>Flow → Create workflow → Order created → Send HTTP request</b>
+            <div className="mt-2">
+              URL:{' '}
+              <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+                {typeof window !== 'undefined' ? window.location.origin : ''}/api/flow/order-confirmation
+              </code>
+            </div>
+            <div className="mt-1">
+              Header:{' '}
+              <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+                Authorization: Bearer &lt;FLOW_SECRET&gt;
+              </code>{' '}
+              — the same value you set in Vercel.
+            </div>
+            <div className="mt-1">
+              Body: JSON with{' '}
+              <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+                order_id, order_name, first_name, phone, total, currency, status_url, shop, country_code
+              </code>
+            </div>
+          </div>
+        </>
+      ) : kind === 'cod' ? (
         <>
           <label className="mb-4 flex items-center gap-3">
             <input

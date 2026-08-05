@@ -121,6 +121,13 @@ export async function GET() {
       breaks: 'Cron endpoints reject every request — no reminders, recovery or scheduled sends.',
     },
     {
+      key: 'FLOW_SECRET',
+      ok: !!env.FLOW_SECRET,
+      required: false,
+      breaks:
+        'The Shopify Flow order-confirmation endpoint refuses all traffic (503). Fine to leave unset until you build that Flow.',
+    },
+    {
       key: 'SHOPIFY_CLIENT_ID',
       ok: !!env.SHOPIFY_CLIENT_ID,
       required: false,
