@@ -549,6 +549,15 @@ M-size subscriber is never pinged when only L restocks.
 3. Optional env: `STOCK_ALERT_ORIGINS` (storefront domains allowed to call the
    subscribe endpoint) and `KLAVIYO_PRIVATE_KEY` (email backup profile push).
 
+4. **Theme widget** — a complete drop-in lives at
+   [`storefront/back-in-stock.liquid`](storefront/back-in-stock.liquid):
+   sold-out detection per variant, the bell button / link, the drawer with
+   multi-select chips, consent checkbox and honeypot, posting the exact
+   payload the endpoint expects. Install: Themes → Edit code → Snippets →
+   new snippet `back-in-stock` → paste the file → in the product template
+   below the buy buttons add `{% render 'back-in-stock', product: product %}`
+   → set `wbis_app_url` at the top of the snippet to your deployment.
+
 **Flood control is built in:** each restock messages at most **3 subscribers
 per unit** that came in, FIFO. With 200 pending and 5 units restocked, 15 are
 messaged and 185 stay pending for the next restock — because 195 people

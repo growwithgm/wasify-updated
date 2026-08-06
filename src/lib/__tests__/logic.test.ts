@@ -349,6 +349,17 @@ describe('back-in-stock alerts', () => {
     expect(restockCap(10, 2.9)).toBe(6) // fractional inventory floors, not rounds
   })
 
+  it('ships a widget that speaks the subscribe contract exactly', () => {
+    // The payload shape is a contract; if the widget and the endpoint drift,
+    // signups silently stop. Pin every field the endpoint reads.
+    const widget = readFileSync(join(process.cwd(), 'storefront/back-in-stock.liquid'), 'utf8')
+    for (const field of ['name', 'phone', 'email', 'hp', 'shop', 'locale', 'country_code', 'product_id', 'product_title', 'product_url', 'variants']) {
+      expect(widget, `widget payload is missing "${field}"`).toContain(`${field}:`)
+    }
+    expect(widget).toContain('/api/stock/subscribe')
+    expect(widget).toContain('wbis-hp') // honeypot stays invisible, not deleted
+  })
+
   it('keeps the endpoints on the shared patterns', () => {
     const restock = readFileSync(join(process.cwd(), 'src/app/api/flow/inventory-restock/route.ts'), 'utf8')
     // Same auth as order-confirmation; the same shared sender — a second send

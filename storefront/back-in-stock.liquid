@@ -1,0 +1,268 @@
+{% comment %}
+  Wasify — Back-in-stock widget (drop-in snippet)
+
+  Install:
+    1. Shopify admin → Online Store → Themes → Edit code
+    2. Snippets → Add a new snippet → "back-in-stock" → paste this file
+    3. In your product template (sections/main-product.liquid or similar),
+       below the buy buttons add:  {% render 'back-in-stock', product: product %}
+    4. Set APP_URL below to your Wasify deployment.
+
+  What it does:
+    · Sold-out selected variant  → big "Notify me about sold out items" button
+    · In-stock selected, but some variants sold out → small bell link with count
+    · Click → bottom drawer: sold-out variant chips (multi-select), name,
+      phone, email, WhatsApp consent checkbox, honeypot
+    · Submits to POST /api/stock/subscribe — the payload shape is the
+      backend's contract; do not rename fields.
+
+  No external libraries. All styles scoped under .wbis-.
+{% endcomment %}
+
+{%- assign wbis_app_url = 'https://wasify-super.vercel.app' -%}
+
+{%- assign wbis_soldout = 0 -%}
+{%- for v in product.variants -%}
+  {%- unless v.available -%}{%- assign wbis_soldout = wbis_soldout | plus: 1 -%}{%- endunless -%}
+{%- endfor -%}
+
+{%- if wbis_soldout > 0 -%}
+<div
+  id="wbis-root"
+  data-app-url="{{ wbis_app_url }}"
+  data-shop="{{ shop.permanent_domain }}"
+  data-locale="{{ request.locale.iso_code | slice: 0, 2 }}"
+  data-country="{{ localization.country.iso_code | default: 'ES' }}"
+  data-product-id="{{ product.id }}"
+  data-product-title="{{ product.title | escape }}"
+  data-product-url="{{ shop.url }}{{ product.url }}"
+>
+  <script type="application/json" id="wbis-variants">
+    [{%- for v in product.variants -%}
+      {"id": {{ v.id }}, "title": {{ v.title | json }}, "available": {{ v.available }}}{%- unless forloop.last -%},{%- endunless -%}
+    {%- endfor -%}]
+  </script>
+
+  {%- comment -%} Big button — shown by JS only while the SELECTED variant is sold out {%- endcomment -%}
+  <button type="button" class="wbis-cta" id="wbis-cta" hidden>
+    <span class="wbis-bell" aria-hidden="true"></span>
+    Notify me about sold out items
+  </button>
+
+  {%- comment -%} Small link — shown while the selected variant IS buyable {%- endcomment -%}
+  <button type="button" class="wbis-link" id="wbis-link" hidden>
+    <span class="wbis-bell" aria-hidden="true"></span>
+    Notify me about sold out items ({{ wbis_soldout }})
+  </button>
+
+  <div class="wbis-overlay" id="wbis-overlay" hidden></div>
+
+  <div class="wbis-drawer" id="wbis-drawer" role="dialog" aria-modal="true" aria-labelledby="wbis-title" hidden>
+    <div class="wbis-handle" aria-hidden="true"></div>
+    <button type="button" class="wbis-close" id="wbis-close" aria-label="Close">&times;</button>
+
+    <h3 class="wbis-title" id="wbis-title">Get notified</h3>
+    <p class="wbis-sub">Pick the options you want. We&rsquo;ll WhatsApp you when they&rsquo;re back.</p>
+
+    <div class="wbis-chips" id="wbis-chips"></div>
+
+    <form id="wbis-form" novalidate>
+      {%- comment -%} Honeypot: humans never see it; bots that fill it get a lying 200. {%- endcomment -%}
+      <input type="text" name="hp" class="wbis-hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
+
+      <input class="wbis-input" type="text" name="name" placeholder="Your name" autocomplete="name" />
+      <input class="wbis-input" type="tel" name="phone" placeholder="+34 612 34 56 78" autocomplete="tel" required />
+      <input class="wbis-input" type="email" name="email" placeholder="name@email.com" autocomplete="email" />
+
+      <label class="wbis-consent">
+        <input type="checkbox" id="wbis-consent" required />
+        <span>I agree to receive a WhatsApp notification when this product is back in stock.</span>
+      </label>
+
+      <p class="wbis-error" id="wbis-error" hidden></p>
+
+      <button type="submit" class="wbis-submit" id="wbis-submit" disabled>Notify me</button>
+    </form>
+
+    <div class="wbis-done" id="wbis-done" hidden>
+      <div class="wbis-done-icon" aria-hidden="true">&#10003;</div>
+      <p><b>You&rsquo;re on the list.</b><br />We&rsquo;ll send you a WhatsApp the moment it&rsquo;s back.</p>
+    </div>
+  </div>
+</div>
+
+<style>
+  #wbis-root { margin-top: 12px; }
+  .wbis-bell { display: inline-block; width: 15px; height: 15px; margin-right: 8px; vertical-align: -2px;
+    background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9'/%3E%3Cpath d='M13.7 21a2 2 0 0 1-3.4 0'/%3E%3C/svg%3E") no-repeat center / contain;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9'/%3E%3Cpath d='M13.7 21a2 2 0 0 1-3.4 0'/%3E%3C/svg%3E") no-repeat center / contain; }
+  .wbis-cta { display: flex; align-items: center; justify-content: center; width: 100%; padding: 15px 20px;
+    background: #111; color: #fff; border: 0; border-radius: 999px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .wbis-cta:hover { opacity: .9; }
+  .wbis-link { display: inline-flex; align-items: center; background: none; border: 0; padding: 4px 0;
+    font-size: 13.5px; color: #111; text-decoration: underline; cursor: pointer; }
+  .wbis-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 9998; }
+  .wbis-drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999; background: #fff;
+    border-radius: 16px 16px 0 0; padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
+    max-width: 560px; margin: 0 auto; box-shadow: 0 -8px 40px rgba(0,0,0,.18);
+    animation: wbis-up .22s ease-out; max-height: 86vh; overflow-y: auto; }
+  @keyframes wbis-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .wbis-handle { width: 44px; height: 4px; border-radius: 2px; background: #d4d4d8; margin: 4px auto 14px; }
+  .wbis-close { position: absolute; top: 14px; right: 16px; background: none; border: 0; font-size: 26px;
+    line-height: 1; color: #52525b; cursor: pointer; }
+  .wbis-title { margin: 0 0 4px; font-size: 20px; font-weight: 700; }
+  .wbis-sub { margin: 0 0 14px; font-size: 13.5px; color: #52525b; }
+  .wbis-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .wbis-chip { padding: 8px 14px; border-radius: 999px; border: 1px solid #d4d4d8; background: #fff;
+    font-size: 13.5px; cursor: pointer; }
+  .wbis-chip[aria-pressed="true"] { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; font-weight: 600; }
+  .wbis-chip[aria-pressed="true"]::before { content: "\2713\00a0"; }
+  .wbis-hp { position: absolute !important; left: -9999px !important; height: 1px; width: 1px; opacity: 0; }
+  .wbis-input { display: block; width: 100%; margin-bottom: 10px; padding: 13px 14px; font-size: 15px;
+    border: 1px solid #d4d4d8; border-radius: 10px; background: #fff; box-sizing: border-box; }
+  .wbis-input:focus { outline: 2px solid #111; outline-offset: -1px; }
+  .wbis-consent { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 14px; font-size: 13px;
+    color: #3f3f46; cursor: pointer; }
+  .wbis-consent input { margin-top: 2px; }
+  .wbis-error { margin: 0 0 10px; font-size: 13px; color: #b91c1c; }
+  .wbis-submit { display: block; width: 100%; padding: 15px 20px; background: #111; color: #fff; border: 0;
+    border-radius: 999px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .wbis-submit:disabled { opacity: .45; cursor: not-allowed; }
+  .wbis-done { text-align: center; padding: 18px 0 6px; font-size: 14.5px; }
+  .wbis-done-icon { width: 44px; height: 44px; margin: 0 auto 10px; border-radius: 50%; background: #dcfce7;
+    color: #15803d; font-size: 22px; line-height: 44px; }
+</style>
+
+<script>
+  (function () {
+    var root = document.getElementById('wbis-root');
+    if (!root) return;
+
+    var variants = JSON.parse(document.getElementById('wbis-variants').textContent);
+    var soldOut = variants.filter(function (v) { return !v.available; });
+    if (!soldOut.length) return;
+
+    var cta = document.getElementById('wbis-cta');
+    var link = document.getElementById('wbis-link');
+    var overlay = document.getElementById('wbis-overlay');
+    var drawer = document.getElementById('wbis-drawer');
+    var chipsBox = document.getElementById('wbis-chips');
+    var form = document.getElementById('wbis-form');
+    var consent = document.getElementById('wbis-consent');
+    var submit = document.getElementById('wbis-submit');
+    var errorBox = document.getElementById('wbis-error');
+    var selected = {};
+
+    /* ---- which trigger shows: big button when the SELECTED variant is
+       sold out, small link otherwise. Reads the product form's [name=id],
+       which every Shopify theme's variant picker keeps current. ---- */
+    function selectedVariantId() {
+      var input = document.querySelector('form[action*="/cart/add"] [name="id"]');
+      return input ? String(input.value) : null;
+    }
+    function refreshTrigger() {
+      var current = variants.find(function (v) { return String(v.id) === selectedVariantId(); });
+      var currentSoldOut = current ? !current.available : false;
+      cta.hidden = !currentSoldOut;
+      link.hidden = currentSoldOut;
+    }
+    document.addEventListener('change', refreshTrigger);
+    refreshTrigger();
+
+    /* ---- chips: every sold-out variant; the currently selected one starts
+       ticked, because it is the one the customer was just refused. ---- */
+    function buildChips() {
+      chipsBox.innerHTML = '';
+      selected = {};
+      var currentId = selectedVariantId();
+      soldOut.forEach(function (v) {
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'wbis-chip';
+        chip.textContent = v.title;
+        var on = String(v.id) === currentId;
+        selected[v.id] = on;
+        chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+        chip.addEventListener('click', function () {
+          selected[v.id] = !selected[v.id];
+          chip.setAttribute('aria-pressed', selected[v.id] ? 'true' : 'false');
+          refreshSubmit();
+        });
+        chipsBox.appendChild(chip);
+      });
+    }
+
+    function count() {
+      return Object.keys(selected).filter(function (id) { return selected[id]; }).length;
+    }
+    function refreshSubmit() {
+      var n = count();
+      submit.textContent = n > 1 ? 'Notify me — ' + n + ' selected' : 'Notify me';
+      submit.disabled = !(n > 0 && consent.checked && form.phone.value.trim());
+    }
+    consent.addEventListener('change', refreshSubmit);
+    form.phone.addEventListener('input', refreshSubmit);
+
+    function open() {
+      buildChips();
+      refreshSubmit();
+      overlay.hidden = false;
+      drawer.hidden = false;
+      document.body.style.overflow = 'hidden';
+    }
+    function close() {
+      overlay.hidden = true;
+      drawer.hidden = true;
+      document.body.style.overflow = '';
+    }
+    cta.addEventListener('click', open);
+    link.addEventListener('click', open);
+    overlay.addEventListener('click', close);
+    document.getElementById('wbis-close').addEventListener('click', close);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      errorBox.hidden = true;
+      submit.disabled = true;
+      submit.textContent = 'Sending…';
+
+      var chosen = soldOut.filter(function (v) { return selected[v.id]; })
+        .map(function (v) { return { id: v.id, title: v.title }; });
+
+      fetch(root.dataset.appUrl + '/api/stock/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name.value.trim(),
+          phone: form.phone.value.trim(),
+          email: form.email.value.trim(),
+          hp: form.hp.value,
+          shop: root.dataset.shop,
+          locale: root.dataset.locale,
+          country_code: root.dataset.country,
+          product_id: root.dataset.productId,
+          product_title: root.dataset.productTitle,
+          product_url: root.dataset.productUrl,
+          variants: chosen
+        })
+      })
+        .then(function (res) { return res.json().then(function (json) { return { ok: res.ok, json: json }; }); })
+        .then(function (r) {
+          if (!r.ok) throw new Error(r.json.error || 'Something went wrong');
+          form.hidden = true;
+          chipsBox.hidden = true;
+          document.getElementById('wbis-done').hidden = false;
+        })
+        .catch(function (err) {
+          errorBox.textContent = err.message === 'Invalid phone number'
+            ? 'That phone number doesn’t look right — include your country code, e.g. +34…'
+            : err.message;
+          errorBox.hidden = false;
+          refreshSubmit();
+          submit.textContent = 'Notify me';
+        });
+    });
+  })();
+</script>
+{%- endif -%}
