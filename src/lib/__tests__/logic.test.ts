@@ -17,6 +17,7 @@ import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
 import { makeCode, isValidCode, toMetaPhone, formatOrderTotal, flowAuthOk } from '@/lib/flow/order-confirmation'
+import { variantLabel, restockCap } from '@/lib/flow/stock-alerts'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -323,6 +324,50 @@ describe('order confirmation flow', () => {
     const middleware = readFileSync(join(process.cwd(), 'src/middleware.ts'), 'utf8')
     expect(middleware).toContain("'/o/'")
     expect(middleware).toContain("'/api/flow/'")
+  })
+})
+
+describe('back-in-stock alerts', () => {
+  it('drops "Default Title" from the message label', () => {
+    // Shopify names a one-variant product's variant "Default Title" —
+    // "Bohemian Maxi Dress — Default Title" must never reach a customer.
+    expect(variantLabel('Bohemian Maxi Dress', 'Ivory / M')).toBe('Bohemian Maxi Dress — Ivory / M')
+    expect(variantLabel('Bohemian Maxi Dress', 'Default Title')).toBe('Bohemian Maxi Dress')
+    expect(variantLabel('Bohemian Maxi Dress', 'default title')).toBe('Bohemian Maxi Dress')
+    expect(variantLabel('Bohemian Maxi Dress', null)).toBe('Bohemian Maxi Dress')
+    expect(variantLabel(null, 'M')).toBe('This product — M')
+  })
+
+  it('caps the fan-out at three messages per restocked unit', () => {
+    // 200 pending, 5 units in: uncapped, 195 people land on a sold-out page
+    // and the block/report rate sinks the WhatsApp quality rating.
+    expect(restockCap(200, 5)).toBe(15)
+    expect(restockCap(10, 2)).toBe(6) // brief's own test case: 6 sent, 4 stay
+    expect(restockCap(2, 5)).toBe(2) // never more than pending
+    expect(restockCap(10, 0)).toBe(0)
+    expect(restockCap(10, -3)).toBe(0)
+    expect(restockCap(10, 2.9)).toBe(6) // fractional inventory floors, not rounds
+  })
+
+  it('keeps the endpoints on the shared patterns', () => {
+    const restock = readFileSync(join(process.cwd(), 'src/app/api/flow/inventory-restock/route.ts'), 'utf8')
+    // Same auth as order-confirmation; the same shared sender — a second send
+    // path would bypass template resolution and error handling.
+    expect(restock).toContain('flowAuthOk')
+    expect(restock).toContain('FLOW_SECRET')
+    expect(restock).toContain('sendWhatsApp')
+    expect(restock).toContain('restockCap')
+    expect(restock).toMatch(/ascending: true/) // FIFO
+
+    const subscribe = readFileSync(join(process.cwd(), 'src/app/api/stock/subscribe/route.ts'), 'utf8')
+    expect(subscribe).toContain("'23505'") // duplicate signup: skip row, not fail request
+    expect(subscribe).toContain('hp') // honeypot answers 200 with nothing inserted
+    expect(subscribe).toContain('consent_ip') // GDPR record
+
+    // Public paths — without these the widget gets a login redirect.
+    const middleware = readFileSync(join(process.cwd(), 'src/middleware.ts'), 'utf8')
+    expect(middleware).toContain("'/api/stock/'")
+    expect(middleware).toContain("'/s/'")
   })
 })
 

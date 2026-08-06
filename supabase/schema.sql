@@ -1451,6 +1451,39 @@ create table if not exists public.order_links (
 
 alter table public.order_links enable row level security;
 
+-- Back-in-stock alerts: storefront signups per VARIANT (never per product —
+-- the M-size subscriber must not be pinged when only L restocks). Written by
+-- the public subscribe endpoint and the restock Flow endpoint, read by the
+-- /s/<code> redirect — all service-role, so RLS on with no policy.
+create table if not exists public.stock_alerts (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid references auth.users(id) on delete cascade,
+  shop           text not null,
+  product_id     text not null,
+  variant_id     text not null,
+  product_title  text,
+  variant_title  text,
+  product_url    text not null,
+  name           text,
+  phone          text not null,          -- digits-only E.164, like contacts
+  email          text,
+  locale         text default 'es',
+  status         text not null default 'pending',   -- pending | sent | failed
+  short_code     text unique,            -- the /s/<code> the button carries
+  clicked_at     timestamptz,
+  consent_at     timestamptz not null default now(),
+  consent_ip     text,                   -- GDPR record of where consent came from
+  notified_at    timestamptz,
+  created_at     timestamptz not null default now(),
+  -- One signup per variant per phone; a re-submit is a no-op, not an error.
+  unique (shop, variant_id, phone)
+);
+
+create index if not exists stock_alerts_pending_idx on public.stock_alerts (shop, variant_id, status);
+create index if not exists stock_alerts_ip_idx on public.stock_alerts (consent_ip, created_at);
+
+alter table public.stock_alerts enable row level security;
+
 -- Per-tenant switch for the Flow-driven order confirmation.
 alter table public.shopify_config add column if not exists orderconf_enabled boolean not null default false;
 alter table public.shopify_config add column if not exists orderconf_template text not null default 'order_confirmation_es';

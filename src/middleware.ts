@@ -16,7 +16,9 @@ const PUBLIC_APIS = [
   '/api/cron/',
   '/api/health',
   '/api/flow/', // Shopify Flow calls in with its own bearer secret
+  '/api/stock/', // storefront back-in-stock signups — public by design
   '/o/', // order-confirmation short links — customers have no session
+  '/s/', // back-in-stock short links — same
 ]
 
 export async function middleware(request: NextRequest) {

@@ -520,6 +520,41 @@ fix — invalid phone, duplicate order, feature off — so Flow never retry-stor
 One link per order (`UNIQUE (shop, order_id)`), and `/o/<code>` records the
 click before redirecting to the order status page.
 
+### Back-in-stock alerts *(optional)*
+
+Customers sign up on an out-of-stock product page (the theme widget calls
+`POST /api/stock/subscribe`); when Shopify Flow reports a restock, pending
+subscribers get a WhatsApp with a buy link. Alerts are **per variant** — the
+M-size subscriber is never pinged when only L restocks.
+
+1. **Meta** → two templates, submitted together so they review in parallel.
+   Category Utility, 2 body variables ({{1}} name, {{2}} product), Dynamic URL
+   button with base `https://YOUR-APP.vercel.app/s/{{1}}`:
+   - `back_in_stock_en` (en) — "Hi {{1}}, good news! {{2}} is available again…"
+   - `back_in_stock_es` (es) — "¡Hola {{1}}! Buenas noticias. {{2}} ya está disponible…"
+
+   > Meta often reclassifies these as **Marketing** (no active order, promotes
+   > a product). Marketing conversations cost more than utility in Spain —
+   > budget for that and don't be surprised.
+
+2. **Shopify Flow** → trigger **Product variant inventory quantity changed**
+   → condition: quantity is above 0 → action **Send HTTP request**:
+   - `POST https://YOUR-APP.vercel.app/api/flow/inventory-restock`
+   - Header `Authorization: Bearer <FLOW_SECRET>` (the same secret as order
+     confirmation — do NOT reuse the cron secrets)
+   - Body: `{ "variant_id": "{{ productVariant.legacyResourceId }}",
+     "product_id": "…", "available": "{{ productVariant.inventoryQuantity }}",
+     "shop": "{{ shop.myshopifyDomain }}" }`
+
+3. Optional env: `STOCK_ALERT_ORIGINS` (storefront domains allowed to call the
+   subscribe endpoint) and `KLAVIYO_PRIVATE_KEY` (email backup profile push).
+
+**Flood control is built in:** each restock messages at most **3 subscribers
+per unit** that came in, FIFO. With 200 pending and 5 units restocked, 15 are
+messaged and 185 stay pending for the next restock — because 195 people
+landing on an already-sold-out page press block/report, and that sinks the
+WhatsApp quality rating for everything else this app sends.
+
 **Turning recovery on will not blast your history.** A sequence only ever
 *starts* for a cart younger than **Max cart age** (default 24 hours) — older
 checkouts imported by the sync are marked *Too old — not messaged* on the
