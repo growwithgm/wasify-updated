@@ -1491,6 +1491,10 @@ alter table public.shopify_config add column if not exists orderconf_language te
 -- true  -> button carries a short /o/<code> link (invisible redirect, click tracked)
 -- false -> button carries the order-status path directly on the store's domain
 alter table public.shopify_config add column if not exists orderconf_track_clicks boolean not null default true;
+-- Back-in-stock controls: master switch + which template each language sends.
+alter table public.shopify_config add column if not exists bis_enabled boolean not null default false;
+alter table public.shopify_config add column if not exists bis_template_es text not null default 'back_in_stock_es';
+alter table public.shopify_config add column if not exists bis_template_en text not null default 'back_in_stock_en';
 
 -- audit_log is service-role only: RLS on, and no policy at all means
 -- authenticated clients can never read or write it.

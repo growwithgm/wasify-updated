@@ -61,10 +61,14 @@ export async function POST(request: Request) {
 
   const { data: config } = await db
     .from('shopify_config')
-    .select('user_id')
+    .select('user_id, bis_enabled, bis_template_es, bis_template_en')
     .eq('store_domain', shop)
     .maybeSingle()
   if (!config) return NextResponse.json({ skipped: true, reason: 'unknown_shop' })
+
+  // The merchant's master switch (Integrations → Back in stock). Signups keep
+  // collecting either way — only SENDING is gated, same rule as recovery.
+  if (!config.bis_enabled) return NextResponse.json({ skipped: true, reason: 'disabled' })
 
   // FIFO — the customer who signed up first is told first.
   const { data: pending } = await db
@@ -84,7 +88,9 @@ export async function POST(request: Request) {
   async function templateFor(locale: string) {
     const lang = locale.toLowerCase().startsWith('es') ? 'es' : 'en'
     if (!templates.has(lang)) {
-      const tpl = await resolveApprovedTemplate(config!.user_id, `back_in_stock_${lang}`, lang)
+      const name =
+        (lang === 'es' ? config!.bis_template_es : config!.bis_template_en) || `back_in_stock_${lang}`
+      const tpl = await resolveApprovedTemplate(config!.user_id, name, lang)
       templates.set(lang, tpl ? { tpl, shape: templateShape(tpl.components) } : null)
     }
     return templates.get(lang) ?? null

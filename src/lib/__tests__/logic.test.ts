@@ -423,6 +423,7 @@ describe('back-in-stock alerts', () => {
     expect(restock).toContain('sendWhatsApp')
     expect(restock).toContain('restockCap')
     expect(restock).toMatch(/ascending: true/) // FIFO
+    expect(restock).toContain('bis_enabled') // the merchant's master switch
 
     const subscribe = readFileSync(join(process.cwd(), 'src/app/api/stock/subscribe/route.ts'), 'utf8')
     expect(subscribe).toContain("'23505'") // duplicate signup: skip row, not fail request

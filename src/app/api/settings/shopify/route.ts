@@ -25,6 +25,8 @@ const EDITABLE = [
   'recovery_r3_template_es', 'recovery_r3_template_en', 'recovery_r3_var_map', 'recovery_r3_discount_id',
 
   'orderconf_enabled', 'orderconf_template', 'orderconf_language', 'orderconf_track_clicks',
+
+  'bis_enabled', 'bis_template_es', 'bis_template_en',
 ]
 
 export async function PATCH(request: Request) {

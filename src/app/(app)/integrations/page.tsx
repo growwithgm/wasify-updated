@@ -966,7 +966,7 @@ function FeatureConfig({
   onSaved: () => void
 }) {
   const toast = useToast()
-  const [open, setOpen] = useState<'cod' | 'recovery' | 'orderconf' | null>(null)
+  const [open, setOpen] = useState<'cod' | 'recovery' | 'orderconf' | 'bis' | null>(null)
 
   if (!config?.has_token) return null
 
@@ -1030,6 +1030,27 @@ function FeatureConfig({
             </Button>
           </div>
         </Card>
+
+        <Card>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="text-[14.5px] font-semibold">Back in stock alerts</div>
+              <div className="mt-1 text-[12px]" style={{ color: 'var(--w-muted)' }}>
+                Customers sign up on sold-out variants; a restock reported by Shopify Flow messages them
+                FIFO, capped at three per unit.
+              </div>
+            </div>
+            <Pill tone={config.bis_enabled ? 'green' : 'gray'}>{config.bis_enabled ? 'On' : 'Off'}</Pill>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <Button size="sm" variant="primary" onClick={() => setOpen('bis')}>
+              Configure
+            </Button>
+            <a href="/stock-alerts">
+              <Button size="sm">View requests</Button>
+            </a>
+          </div>
+        </Card>
       </div>
 
       {open && (
@@ -1077,7 +1098,7 @@ function FeatureModal({
   onClose,
   onSaved,
 }: {
-  kind: 'cod' | 'recovery' | 'orderconf'
+  kind: 'cod' | 'recovery' | 'orderconf' | 'bis'
   config: any
   templates: Array<{ name: string; language: string }>
   onClose: () => void
@@ -1191,7 +1212,7 @@ function FeatureModal({
     <Modal
       open
       onClose={onClose}
-      title={kind === 'cod' ? 'COD order confirmation' : kind === 'orderconf' ? 'Order confirmation (Shopify Flow)' : 'Abandoned cart recovery'}
+      title={kind === 'cod' ? 'COD order confirmation' : kind === 'orderconf' ? 'Order confirmation (Shopify Flow)' : kind === 'bis' ? 'Back in stock alerts' : 'Abandoned cart recovery'}
       width={680}
       footer={
         <>
@@ -1202,7 +1223,42 @@ function FeatureModal({
         </>
       }
     >
-      {kind === 'orderconf' ? (
+      {kind === 'bis' ? (
+        <>
+          <label className="mb-4 flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={form.bis_enabled ?? false}
+              onChange={(e) => set('bis_enabled', e.target.checked)}
+              className="h-4 w-4 cursor-pointer"
+              style={{ accentColor: '#16A34A' }}
+            />
+            <span className="text-[13px] font-medium">Enable back-in-stock messages</span>
+          </label>
+
+          <div className="mb-3 text-[12.5px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
+            Signups keep collecting even while this is off — only sending is gated. The customer&apos;s
+            language picks the template: Spanish locales use the Spanish one, everyone else English.
+          </div>
+
+          <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <TemplateSelect field="bis_template_en" label="English template" />
+            <TemplateSelect field="bis_template_es" label="Spanish template" />
+          </div>
+
+          <div
+            className="mt-3 rounded-lg px-3 py-2 text-[12px] leading-relaxed"
+            style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+          >
+            Both templates need <b>two body variables</b> ({'{{1}}'} name, {'{{2}}'} product) and a{' '}
+            <b>Dynamic URL button</b> with base{' '}
+            <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+              {typeof window !== 'undefined' ? window.location.origin : ''}/s/{'{{1}}'}
+            </code>
+            . After Meta approves them, run <b>Templates → Sync from Meta</b> or they will not appear here.
+          </div>
+        </>
+      ) : kind === 'orderconf' ? (
         <>
           <label className="mb-4 flex items-center gap-3">
             <input
