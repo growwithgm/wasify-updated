@@ -1246,16 +1246,33 @@ function FeatureModal({
             <TemplateSelect field="bis_template_es" label="Spanish template" />
           </div>
 
+          <label className="mt-4 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={form.bis_track_clicks ?? true}
+              onChange={(e) => set('bis_track_clicks', e.target.checked)}
+              className="mt-0.5 h-4 w-4 cursor-pointer"
+              style={{ accentColor: '#16A34A' }}
+            />
+            <span className="text-[12.5px] leading-relaxed">
+              <b>Track button clicks.</b> The customer lands on the product page either way — this only
+              decides whether the tap passes through an invisible redirect that records it. Off means the
+              &ldquo;Opened link&rdquo; column on Stock alerts stays empty.
+            </span>
+          </label>
+
           <div
             className="mt-3 rounded-lg px-3 py-2 text-[12px] leading-relaxed"
             style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
           >
             Both templates need <b>two body variables</b> ({'{{1}}'} name, {'{{2}}'} product) and a{' '}
-            <b>Dynamic URL button</b> with base{' '}
-            <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
-              {typeof window !== 'undefined' ? window.location.origin : ''}/s/{'{{1}}'}
+            <b>Dynamic URL button</b> whose base matches this choice:
+            <code className="mt-1 block" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+              {(form.bis_track_clicks ?? true)
+                ? `${typeof window !== 'undefined' ? window.location.origin : ''}/s/{{1}}`
+                : 'https://YOUR-STORE-DOMAIN.com/{{1}}'}
             </code>
-            . After Meta approves them, run <b>Templates → Sync from Meta</b> or they will not appear here.
+            After Meta approves them, run <b>Templates → Sync from Meta</b> or they will not appear here.
           </div>
         </>
       ) : kind === 'orderconf' ? (

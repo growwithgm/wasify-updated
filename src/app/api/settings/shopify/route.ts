@@ -26,7 +26,7 @@ const EDITABLE = [
 
   'orderconf_enabled', 'orderconf_template', 'orderconf_language', 'orderconf_track_clicks',
 
-  'bis_enabled', 'bis_template_es', 'bis_template_en',
+  'bis_enabled', 'bis_template_es', 'bis_template_en', 'bis_track_clicks',
 ]
 
 export async function PATCH(request: Request) {

@@ -5,6 +5,7 @@ import { templateShape, paramMismatch, explainMetaError } from '@/lib/whatsapp/t
 import { findOrCreateContact, findOrCreateConversation } from '@/lib/contacts'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { flowAuthOk } from '@/lib/flow/order-confirmation'
+import { urlSuffix } from '@/lib/engines/recovery'
 import { variantLabel, restockCap } from '@/lib/flow/stock-alerts'
 
 export const runtime = 'nodejs'
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
 
   const { data: config } = await db
     .from('shopify_config')
-    .select('user_id, bis_enabled, bis_template_es, bis_template_en')
+    .select('user_id, bis_enabled, bis_template_es, bis_template_en, bis_track_clicks')
     .eq('store_domain', shop)
     .maybeSingle()
   if (!config) return NextResponse.json({ skipped: true, reason: 'unknown_shop' })
@@ -122,15 +123,21 @@ export async function POST(request: Request) {
         continue
       }
 
+      // Same choice the order confirmation offers: with click tracking the
+      // suffix is the short /s/<code>; without it, the product page's own
+      // path goes straight onto the store's domain and this app is never in
+      // the customer's path.
+      const buttonParam = (config.bis_track_clicks ?? true) ? row.short_code : urlSuffix(row.product_url)
+
       const components: any[] = [
         { type: 'body', parameters: vars.map((t) => ({ type: 'text' as const, text: t })) },
       ]
-      if (resolved.shape.dynamicUrlButtons.length) {
+      if (resolved.shape.dynamicUrlButtons.length && buttonParam) {
         components.push({
           type: 'button',
           sub_type: 'url',
           index: String(resolved.shape.dynamicUrlButtons[0]),
-          parameters: [{ type: 'text', text: row.short_code }],
+          parameters: [{ type: 'text', text: buttonParam }],
         })
       }
 
