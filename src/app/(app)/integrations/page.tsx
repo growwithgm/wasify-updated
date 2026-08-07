@@ -1237,13 +1237,12 @@ function FeatureModal({
           </label>
 
           <div className="mb-3 text-[12.5px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
-            Signups keep collecting even while this is off — only sending is gated. The customer&apos;s
-            language picks the template: Spanish locales use the Spanish one, everyone else English.
+            Signups keep collecting even while this is off — only sending is gated.
           </div>
 
-          <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            <TemplateSelect field="bis_template_en" label="English template" />
-            <TemplateSelect field="bis_template_es" label="Spanish template" />
+          <TemplateSelect field="bis_template_en" label="Template" />
+          <div className="mt-1.5 text-[12px]" style={{ color: 'var(--w-muted)' }}>
+            Every subscriber gets this template, whatever their language.
           </div>
 
           <label className="mt-4 flex items-start gap-3">
@@ -1265,7 +1264,7 @@ function FeatureModal({
             className="mt-3 rounded-lg px-3 py-2 text-[12px] leading-relaxed"
             style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
           >
-            Both templates need <b>two body variables</b> ({'{{1}}'} name, {'{{2}}'} product) and a{' '}
+            The template needs <b>two body variables</b> ({'{{1}}'} name, {'{{2}}'} product) and a{' '}
             <b>Dynamic URL button</b> whose base matches this choice:
             <code className="mt-1 block" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
               {(form.bis_track_clicks ?? true)

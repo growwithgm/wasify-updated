@@ -89,9 +89,13 @@ export async function POST(request: Request) {
   async function templateFor(locale: string) {
     const lang = locale.toLowerCase().startsWith('es') ? 'es' : 'en'
     if (!templates.has(lang)) {
-      const name =
-        (lang === 'es' ? config!.bis_template_es : config!.bis_template_en) || `back_in_stock_${lang}`
-      const tpl = await resolveApprovedTemplate(config!.user_id, name, lang)
+      // One configured template is the normal case. Try this language's own
+      // name first, then the other's — a Spanish signup must fall back to
+      // the single template rather than fail because no Spanish one exists.
+      const primary = lang === 'es' ? config!.bis_template_es : config!.bis_template_en
+      const other = lang === 'es' ? config!.bis_template_en : config!.bis_template_es
+      let tpl = await resolveApprovedTemplate(config!.user_id, primary || `back_in_stock_${lang}`, lang)
+      if (!tpl && other) tpl = await resolveApprovedTemplate(config!.user_id, other, lang)
       templates.set(lang, tpl ? { tpl, shape: templateShape(tpl.components) } : null)
     }
     return templates.get(lang) ?? null
