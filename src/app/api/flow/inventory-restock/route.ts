@@ -117,7 +117,10 @@ export async function POST(request: Request) {
         continue
       }
 
-      const vars = [(row.name ?? '').trim() || 'Hola', variantLabel(row.product_title, row.variant_title)]
+      // The widget's name field is optional; the fallback must read naturally
+      // in the template's own language — "Hi Hola," was nobody's greeting.
+      const fallbackName = (row.locale ?? '').toLowerCase().startsWith('es') ? 'cliente' : 'there'
+      const vars = [(row.name ?? '').trim() || fallbackName, variantLabel(row.product_title, row.variant_title)]
       const mismatch = paramMismatch(resolved.shape, vars, {
         urlSuffixes: resolved.shape.dynamicUrlButtons.length ? 1 : 0,
       })
