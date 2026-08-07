@@ -17,7 +17,7 @@ import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
 import { makeCode, isValidCode, toMetaPhone, formatOrderTotal, flowAuthOk } from '@/lib/flow/order-confirmation'
-import { variantLabel, restockCap } from '@/lib/flow/stock-alerts'
+import { variantLabel, restockCap, originAllowed, bisTags, verifyProxySignature } from '@/lib/flow/stock-alerts'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -347,6 +347,60 @@ describe('back-in-stock alerts', () => {
     expect(restockCap(10, 0)).toBe(0)
     expect(restockCap(10, -3)).toBe(0)
     expect(restockCap(10, 2.9)).toBe(6) // fractional inventory floors, not rounds
+  })
+
+  it('matches origins by hostname, www-insensitively', () => {
+    // "Failed to fetch" with no diagnosis was exactly this: the storefront on
+    // www.ibban.com against an allow-list entry of ibban.com.
+    const list = 'https://ibban.com,https://xmkm1p-vh.myshopify.com'
+    expect(originAllowed('https://ibban.com', list)).toBe(true)
+    expect(originAllowed('https://www.ibban.com', list)).toBe(true)
+    expect(originAllowed('https://IBBAN.com', list)).toBe(true)
+    expect(originAllowed('https://xmkm1p-vh.myshopify.com', list)).toBe(true)
+    expect(originAllowed('https://evil.com', list)).toBe(false)
+    expect(originAllowed(null, list)).toBe(false)
+    expect(originAllowed('https://anything.com', '')).toBe(true) // no list = open
+    expect(originAllowed('https://anything.com', undefined)).toBe(true)
+  })
+
+  it('builds the customer tags: one marker plus one per variant, deduped', () => {
+    expect(bisTags(['456', 789])).toEqual(['back-in-stock', 'bis-456', 'bis-789'])
+    expect(bisTags(['456', '456'])).toEqual(['back-in-stock', 'bis-456'])
+    expect(bisTags([])).toEqual(['back-in-stock'])
+  })
+
+  it('verifies the Shopify app-proxy signature', () => {
+    // Shopify's algorithm: params minus signature, repeated values joined by
+    // commas, pairs sorted and concatenated with NO separators, HMAC hex.
+    const secret = 'shpss_test'
+    const params = new URLSearchParams({
+      shop: 'xmkm1p-vh.myshopify.com',
+      path_prefix: '/apps/wasify',
+      timestamp: '1785275422',
+    })
+    const message = 'path_prefix=/apps/wasifyshop=xmkm1p-vh.myshopify.comtimestamp=1785275422'
+    params.set('signature', createHmac('sha256', secret).update(message).digest('hex'))
+
+    expect(verifyProxySignature(params, secret)).toBe(true)
+    expect(verifyProxySignature(params, 'wrong-secret')).toBe(false)
+
+    params.set('shop', 'evil.myshopify.com') // tampering breaks it
+    expect(verifyProxySignature(params, secret)).toBe(false)
+    expect(verifyProxySignature(new URLSearchParams(), secret)).toBe(false) // no signature at all
+  })
+
+  it('never touches marketing consent when mirroring the customer', () => {
+    // The customer consented to ONE WhatsApp notification. Setting either
+    // consent field routes them into Klaviyo's marketing lists — a GDPR
+    // violation dressed as a convenience.
+    const lib = readFileSync(join(process.cwd(), 'src/lib/shopify/customers.ts'), 'utf8')
+    // As INPUT FIELDS — the doc comment naming the rule is allowed to.
+    expect(lib).not.toMatch(/emailMarketingConsent\s*:/)
+    expect(lib).not.toMatch(/smsMarketingConsent\s*:/)
+    expect(lib).toContain('tagsAdd')
+    // And the scope it needs is actually requested.
+    const admin = readFileSync(join(process.cwd(), 'src/lib/shopify/admin.ts'), 'utf8')
+    expect(admin).toContain("'write_customers'")
   })
 
   it('ships a widget that speaks the subscribe contract exactly', () => {

@@ -145,7 +145,7 @@ In the Partner Dashboard, **Configuration** (or **Create version**):
 Paste into **API access → Scopes**, as one comma-separated line with no spaces:
 
 ```
-read_customers,read_orders,write_orders,read_checkouts,read_fulfillments,read_products,read_discounts,write_discounts
+read_customers,write_customers,read_orders,write_orders,read_checkouts,read_fulfillments,read_products,read_discounts,write_discounts
 ```
 
 Leave **Optional scopes** empty.
@@ -156,6 +156,7 @@ is for:
 | Scope | Without it |
 |---|---|
 | `read_customers` | Orders and carts mirror with no customer name or email |
+| `write_customers` | Back-in-stock signups are not mirrored into Shopify as customer + `bis-*` tags — Flow's "Customer tags added" trigger never fires. Also needs **Protected Customer Data Level 2** approval (Partner Dashboard → API access → Protected customer data — request it FIRST, approval is not instant). |
 | `read_orders` | No `orders/*` **and no `checkouts/*` webhooks** — Shopify gates the checkout topics on `read_orders`, not on `read_checkouts` |
 | `write_orders` | COD tags never applied — no "COD Pending" → "COD Confirmed" in Shopify |
 | `read_checkouts` | The abandoned-cart backfill cannot read checkout history |

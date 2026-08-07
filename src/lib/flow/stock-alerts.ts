@@ -1,3 +1,5 @@
+import { safeEqual, hmacHex } from '@/lib/crypto'
+
 /**
  * Back-in-stock alert helpers. Pure logic here, routes stay thin —
  * same split as order-confirmation.
@@ -26,6 +28,73 @@ export function variantLabel(productTitle: string | null | undefined, variantTit
 export function restockCap(pendingCount: number, available: number): number {
   const units = Math.max(0, Math.floor(available))
   return Math.min(pendingCount, units * 3)
+}
+
+/**
+ * Is this browser origin allowed to call the subscribe endpoint?
+ *
+ * Matching is by HOSTNAME, case-insensitive, and treats `www.` and the apex
+ * as the same site — `https://www.ibban.com` must not fail against an
+ * allow-list entry of `https://ibban.com`. An empty list allows everything:
+ * the endpoint is public by design and its real defences are the honeypot,
+ * the rate limit and the unique constraint.
+ */
+export function originAllowed(origin: string | null | undefined, allowedCsv: string | undefined): boolean {
+  const list = (allowedCsv ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (!list.length) return true
+  if (!origin) return false
+
+  const bare = (value: string): string | null => {
+    try {
+      const host = new URL(value.includes('://') ? value : `https://${value}`).hostname
+      return host.toLowerCase().replace(/^www\./, '')
+    } catch {
+      return null
+    }
+  }
+
+  const originHost = bare(origin)
+  if (!originHost) return false
+  return list.some((entry) => bare(entry) === originHost)
+}
+
+/** The tags a signup earns: the general marker plus one per variant. */
+export function bisTags(variantIds: Array<string | number>): string[] {
+  const tags = new Set<string>(['back-in-stock'])
+  for (const id of variantIds) {
+    const clean = String(id).trim()
+    if (clean) tags.add(`bis-${clean}`)
+  }
+  return [...tags]
+}
+
+/**
+ * Shopify App Proxy signature check.
+ *
+ * Shopify signs proxied requests with the app's shared secret: every query
+ * parameter except `signature`, values of repeated keys joined by commas,
+ * pairs sorted and concatenated WITHOUT separators, HMAC-SHA256 hex.
+ */
+export function verifyProxySignature(params: URLSearchParams, secret: string): boolean {
+  const signature = params.get('signature') ?? ''
+  if (!signature || !secret) return false
+
+  const grouped = new Map<string, string[]>()
+  for (const [key, value] of params.entries()) {
+    if (key === 'signature') continue
+    if (!grouped.has(key)) grouped.set(key, [])
+    grouped.get(key)!.push(value)
+  }
+
+  const message = [...grouped.keys()]
+    .sort()
+    .map((key) => `${key}=${grouped.get(key)!.join(',')}`)
+    .join('')
+
+  return safeEqual(hmacHex(secret, message), signature)
 }
 
 /**

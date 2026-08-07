@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { makeCode, toMetaPhone } from '@/lib/flow/order-confirmation'
-import { variantLabel, pushKlaviyoProfile } from '@/lib/flow/stock-alerts'
+import { variantLabel, pushKlaviyoProfile, originAllowed } from '@/lib/flow/stock-alerts'
+import { upsertBisCustomer } from '@/lib/shopify/customers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,27 +19,23 @@ export const dynamic = 'force-dynamic'
  * do not change it without telling them.
  */
 
-/** Storefront origins allowed to call this from the browser. */
-function corsOrigin(request: Request): string {
-  const origin = request.headers.get('origin') ?? ''
-  const allowed = (process.env.STOCK_ALERT_ORIGINS ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-  // No list configured → any storefront may call. There are no cookies or
-  // credentials in play; the endpoint's real defences are above.
-  if (!allowed.length) return '*'
-  return allowed.includes(origin) ? origin : allowed[0]
-}
-
+/**
+ * CORS: echo the caller's origin (no cookies are in play, so this is safe)
+ * and enforce the allow-list with a READABLE 403 instead of a header
+ * mismatch. A mismatch surfaces in the browser as a bare "Failed to fetch",
+ * which is exactly the undiagnosable state the theme developer reported.
+ */
 function withCors(request: Request, res: NextResponse): NextResponse {
-  res.headers.set('Access-Control-Allow-Origin', corsOrigin(request))
+  res.headers.set('Access-Control-Allow-Origin', request.headers.get('origin') || '*')
   res.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.headers.set('Access-Control-Allow-Headers', 'Content-Type')
+  res.headers.set('Vary', 'Origin')
   return res
 }
 
 export async function OPTIONS(request: Request) {
+  // Preflight always succeeds — the allow-list verdict comes on the POST,
+  // where the body can carry a reason the widget can actually display.
   return withCors(request, new NextResponse(null, { status: 204 }))
 }
 
@@ -68,39 +65,36 @@ function rateLimited(ip: string): boolean {
   return false
 }
 
-export async function POST(request: Request) {
-  let body: {
-    name?: string
-    phone?: string
-    email?: string
-    hp?: string
-    shop?: string
-    locale?: string
-    country_code?: string
-    product_id?: string | number
-    product_title?: string
-    product_url?: string
-    variants?: Array<{ id: string | number; title?: string }>
-  }
-  try {
-    body = await request.json()
-  } catch {
-    return withCors(request, NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }))
-  }
+export type SubscribeBody = {
+  name?: string
+  phone?: string
+  email?: string
+  hp?: string
+  shop?: string
+  locale?: string
+  country_code?: string
+  product_id?: string | number
+  product_title?: string
+  product_url?: string
+  variants?: Array<{ id: string | number; title?: string }>
+}
 
+/**
+ * The whole signup, transport-agnostic — shared by the direct CORS route
+ * below and the App Proxy route, so the two paths can never drift.
+ */
+export async function processSubscribe(
+  body: SubscribeBody,
+  ip: string
+): Promise<{ status: number; payload: Record<string, unknown> }> {
   // Honeypot: a human never fills the invisible field. Answer exactly like
   // success so the bot learns nothing.
   if ((body.hp ?? '').trim()) {
-    return withCors(request, NextResponse.json({ ok: true, added: 0 }))
+    return { status: 200, payload: { ok: true, added: 0 } }
   }
 
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    request.headers.get('x-real-ip') ||
-    'unknown'
-
   if (rateLimited(ip)) {
-    return withCors(request, NextResponse.json({ error: 'Too many requests' }, { status: 429 }))
+    return { status: 429, payload: { error: 'Too many requests' } }
   }
 
   const shop = normalizeShopDomain(body.shop ?? '')
@@ -108,15 +102,12 @@ export async function POST(request: Request) {
   const variants = (body.variants ?? []).filter((v) => v?.id != null).slice(0, 20)
 
   if (!shop || !productId || !body.product_url || !variants.length) {
-    return withCors(
-      request,
-      NextResponse.json({ error: 'shop, product_id, product_url and variants are required' }, { status: 400 })
-    )
+    return { status: 400, payload: { error: 'shop, product_id, product_url and variants are required' } }
   }
 
   const phone = toMetaPhone(body.phone, body.country_code)
   if (!phone) {
-    return withCors(request, NextResponse.json({ error: 'Invalid phone number' }, { status: 400 }))
+    return { status: 400, payload: { error: 'Invalid phone number' } }
   }
 
   const db = createServiceClient()
@@ -129,7 +120,7 @@ export async function POST(request: Request) {
     .eq('store_domain', shop)
     .maybeSingle()
   if (!config) {
-    return withCors(request, NextResponse.json({ error: 'Unknown shop' }, { status: 400 }))
+    return { status: 400, payload: { error: 'Unknown shop' } }
   }
 
   let added = 0
@@ -156,20 +147,60 @@ export async function POST(request: Request) {
     } else if (String(error.code) !== '23505') {
       // 23505 = already signed up for this variant — a no-op, not a failure.
       // Anything else is real (schema drift, say) and must not be silent.
-      return withCors(request, NextResponse.json({ error: error.message }, { status: 500 }))
+      return { status: 500, payload: { error: error.message } }
     }
   }
 
-  // Email backup for when WhatsApp fails or the customer blocks the number.
-  // Best-effort and env-gated — never allowed to fail the signup.
   if (added > 0) {
+    // Email backup for when WhatsApp fails or the customer blocks the number.
+    // Best-effort and env-gated — never allowed to fail the signup.
     await pushKlaviyoProfile({
       email: body.email,
       phone,
       name: body.name,
       variantLabel: variantLabel(body.product_title, variants[0]?.title),
     })
+
+    // Mirror into Shopify as customer + bis-* tags so Flow's "Customer tags
+    // added" trigger can pick it up. Also best-effort: a missing scope or a
+    // pending Protected Customer Data approval logs, and the signup succeeds.
+    await upsertBisCustomer(shop, {
+      email: body.email,
+      phone,
+      name: body.name,
+      variantIds: variants.map((v) => v.id),
+    })
   }
 
-  return withCors(request, NextResponse.json({ ok: true, added }))
+  return { status: 200, payload: { ok: true, added } }
+}
+
+export async function POST(request: Request) {
+  const origin = request.headers.get('origin')
+  if (!originAllowed(origin, process.env.STOCK_ALERT_ORIGINS)) {
+    // Readable on purpose: the preflight passed, so the widget can show this
+    // instead of the browser's opaque "Failed to fetch".
+    return withCors(
+      request,
+      NextResponse.json(
+        { error: `Origin ${origin ?? '(none)'} is not in STOCK_ALERT_ORIGINS` },
+        { status: 403 }
+      )
+    )
+  }
+
+  let body: SubscribeBody
+  try {
+    body = await request.json()
+  } catch {
+    return withCors(request, NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }))
+  }
+
+  const ip =
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    'unknown'
+
+  const result = await processSubscribe(body, ip)
+  return withCors(request, NextResponse.json(result.payload, { status: result.status }))
 }

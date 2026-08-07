@@ -17,6 +17,7 @@ const PUBLIC_APIS = [
   '/api/health',
   '/api/flow/', // Shopify Flow calls in with its own bearer secret
   '/api/stock/', // storefront back-in-stock signups — public by design
+  '/proxy/', // Shopify App Proxy — authenticated by its own signature
   '/o/', // order-confirmation short links — customers have no session
   '/s/', // back-in-stock short links — same
 ]

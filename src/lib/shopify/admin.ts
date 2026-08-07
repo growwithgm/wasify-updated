@@ -17,6 +17,8 @@ export const SHOPIFY_API_VERSION = '2026-04'
  * automation never fires.
  *
  *   read_customers    contact name/email when mirroring orders and checkouts
+ *   write_customers   back-in-stock signups mirrored into Shopify as a
+ *                     customer + tags (needs Protected Customer Data L2)
  *   read_orders       orders/* AND checkouts/* webhooks (checkout topics are
  *                     gated on read_orders, not read_checkouts), plus the
  *                     order backfill
@@ -32,6 +34,7 @@ export const SHOPIFY_API_VERSION = '2026-04'
  */
 export const SHOPIFY_SCOPES = [
   'read_customers',
+  'write_customers', // back-in-stock signups mirrored as customer + bis-* tags
   'read_orders',
   'write_orders',
   'read_checkouts',
