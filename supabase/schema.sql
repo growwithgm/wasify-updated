@@ -1475,7 +1475,9 @@ create table if not exists public.stock_alerts (
   consent_ip     text,                   -- GDPR record of where consent came from
   notified_at    timestamptz,
   created_at     timestamptz not null default now(),
-  -- One signup per variant per phone; a re-submit is a no-op, not an error.
+  -- One signup per variant per phone. While pending, a re-submit is a no-op;
+  -- after the customer was notified, a re-submit re-arms this same row back
+  -- to pending (the only way to a second message — one signup, one message).
   unique (shop, variant_id, phone)
 );
 

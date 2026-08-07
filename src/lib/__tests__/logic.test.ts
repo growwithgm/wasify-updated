@@ -17,7 +17,7 @@ import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
 import { makeCode, isValidCode, toMetaPhone, formatOrderTotal, flowAuthOk } from '@/lib/flow/order-confirmation'
-import { variantLabel, restockCap, originAllowed, bisTags, verifyProxySignature } from '@/lib/flow/stock-alerts'
+import { variantLabel, restockCap, originAllowed, bisTags, verifyProxySignature, rearmPatch } from '@/lib/flow/stock-alerts'
 import { isAuthorizedCron, cronAuthHint, cronUnauthorizedBody } from '@/lib/cron'
 import { siteUrl, siteUrlStatus, PLACEHOLDER_SITE_HOSTS } from '@/lib/site-url'
 import {
@@ -349,6 +349,35 @@ describe('back-in-stock alerts', () => {
     expect(restockCap(10, 2.9)).toBe(6) // fractional inventory floors, not rounds
   })
 
+  it('re-arms a notified signup only through a fresh form-fill', () => {
+    // One signup, one message: a `sent` row is invisible to the next restock
+    // (it only reads `pending`), so the ONLY path to a second message is the
+    // customer re-submitting the form — which resets this same row.
+    const now = new Date('2026-08-07T10:00:00Z')
+    const patch = rearmPatch({
+      name: '  Ana  ',
+      email: '',
+      locale: 'en-GB-oed',
+      productTitle: 'Aloe Gel',
+      variantTitle: '200ml',
+      productUrl: 'https://ibban.com/products/aloe-gel',
+      ip: '1.2.3.4',
+      now,
+    })
+    expect(patch.status).toBe('pending')
+    expect(patch.notified_at).toBeNull()
+    expect(patch.clicked_at).toBeNull()
+    // Back of the FIFO queue — a re-fill is a NEW request, not a saved spot.
+    expect(patch.created_at).toBe(now.toISOString())
+    expect(patch.consent_at).toBe(now.toISOString())
+    expect(patch.consent_ip).toBe('1.2.3.4')
+    expect(patch.name).toBe('Ana') // latest form wins, trimmed
+    expect(patch.email).toBeNull() // blank collapses to null, like the insert
+    expect(patch.locale).toBe('en-GB-oe') // same 8-char cap as the insert
+    // The old message's /s/<code> link must keep working.
+    expect(patch).not.toHaveProperty('short_code')
+  })
+
   it('matches origins by hostname, www-insensitively', () => {
     // "Failed to fetch" with no diagnosis was exactly this: the storefront on
     // www.ibban.com against an allow-list entry of ibban.com.
@@ -429,6 +458,8 @@ describe('back-in-stock alerts', () => {
     expect(subscribe).toContain("'23505'") // duplicate signup: skip row, not fail request
     expect(subscribe).toContain('hp') // honeypot answers 200 with nothing inserted
     expect(subscribe).toContain('consent_ip') // GDPR record
+    expect(subscribe).toContain('rearmPatch') // notified row + re-fill → pending again
+    expect(subscribe).toContain(".neq('status', 'pending')") // …but a pending row stays a no-op
 
     // Public paths — without these the widget gets a login redirect.
     const middleware = readFileSync(join(process.cwd(), 'src/middleware.ts'), 'utf8')

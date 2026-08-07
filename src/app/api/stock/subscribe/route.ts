@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { makeCode, toMetaPhone } from '@/lib/flow/order-confirmation'
-import { variantLabel, pushKlaviyoProfile, originAllowed } from '@/lib/flow/stock-alerts'
+import { variantLabel, pushKlaviyoProfile, originAllowed, rearmPatch } from '@/lib/flow/stock-alerts'
 import { upsertBisCustomer } from '@/lib/shopify/customers'
 
 export const runtime = 'nodejs'
@@ -13,7 +13,10 @@ export const dynamic = 'force-dynamic'
  *
  * PUBLIC — no auth, so its defences are layered: a honeypot field that
  * swallows bots with a lying 200, an IP rate limit, phone validation, and a
- * per-(shop, variant, phone) unique constraint that makes replays no-ops.
+ * per-(shop, variant, phone) unique constraint. A replay while the alert is
+ * still pending is a no-op; after the customer was notified, the SAME
+ * form-fill is the only way to opt back in — it re-arms the row (see
+ * rearmPatch), so one signup never yields more than one message.
  *
  * The payload shape is a contract with the theme developer's widget —
  * do not change it without telling them.
@@ -144,8 +147,35 @@ export async function processSubscribe(
 
     if (!error) {
       added++
-    } else if (String(error.code) !== '23505') {
-      // 23505 = already signed up for this variant — a no-op, not a failure.
+    } else if (String(error.code) === '23505') {
+      // Same (shop, variant, phone) again. Still pending → the replay no-op
+      // the constraint exists for. Already notified (sent/failed) → this
+      // fresh form-fill is the customer opting back in, and it is the ONLY
+      // path back to pending: the restock endpoint never touches sent rows.
+      const { data: rearmed, error: rearmError } = await db
+        .from('stock_alerts')
+        .update(
+          rearmPatch({
+            name: body.name,
+            email: body.email,
+            locale: body.locale,
+            productTitle: body.product_title,
+            variantTitle: variant.title,
+            productUrl: body.product_url,
+            ip,
+          })
+        )
+        .eq('shop', shop)
+        .eq('variant_id', String(variant.id))
+        .eq('phone', phone)
+        .neq('status', 'pending')
+        .select('id')
+
+      if (rearmError) {
+        return { status: 500, payload: { error: rearmError.message } }
+      }
+      if (rearmed?.length) added++
+    } else {
       // Anything else is real (schema drift, say) and must not be silent.
       return { status: 500, payload: { error: error.message } }
     }

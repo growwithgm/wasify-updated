@@ -61,6 +61,44 @@ export function originAllowed(origin: string | null | undefined, allowedCsv: str
   return list.some((entry) => bare(entry) === originHost)
 }
 
+/**
+ * The update a repeat form-fill applies to a row that was already notified.
+ *
+ * One message per signup: after a row goes `sent` (or `failed`), the next
+ * restock must NOT include it again — only the customer filling the form
+ * again re-arms it. That re-fill is a NEW request, so the row goes back to
+ * `pending` at the BACK of the FIFO queue (fresh created_at), with fresh
+ * consent and whatever name/email they typed this time. The short_code is
+ * deliberately absent from the patch: the link in the message they already
+ * received must keep working.
+ */
+export function rearmPatch(form: {
+  name?: string | null
+  email?: string | null
+  locale?: string | null
+  productTitle?: string | null
+  variantTitle?: string | null
+  productUrl: string
+  ip?: string | null
+  now?: Date
+}): Record<string, unknown> {
+  const at = (form.now ?? new Date()).toISOString()
+  return {
+    status: 'pending',
+    notified_at: null,
+    clicked_at: null,
+    created_at: at,
+    consent_at: at,
+    consent_ip: form.ip ?? null,
+    name: (form.name ?? '').trim() || null,
+    email: (form.email ?? '').trim() || null,
+    locale: (form.locale ?? 'es').slice(0, 8),
+    product_title: form.productTitle ?? null,
+    variant_title: form.variantTitle ?? null,
+    product_url: form.productUrl,
+  }
+}
+
 /** The tags a signup earns: the general marker plus one per variant. */
 export function bisTags(variantIds: Array<string | number>): string[] {
   const tags = new Set<string>(['back-in-stock'])
