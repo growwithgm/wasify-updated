@@ -13,6 +13,7 @@ import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
 import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { rowTagNames } from '@/app/api/contacts/import/route'
+import { prepareRows, phoneKey, phoneIndex, backfillPatch, chunk } from '@/lib/contacts-import'
 import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
@@ -1310,6 +1311,81 @@ describe('CSV tag column', () => {
     expect(rowTagNames({ a: 'VIP', b: 'vip' }, ['a', 'b'])).toEqual(['VIP'])
     expect(rowTagNames({ a: ' , ;; ', b: '' }, ['a', 'b'])).toEqual([])
     expect(rowTagNames({}, [])).toEqual([])
+  })
+})
+
+describe('bulk CSV import', () => {
+  const mapping = { Phone: 'phone', Name: 'name', Email: 'email', Tag: 'tag' }
+
+  it('validates phones and keeps real spreadsheet line numbers across slices', () => {
+    // The file goes up in slices; an error in slice 3 must still point at
+    // the line the merchant can find in their spreadsheet.
+    const { prepared, errors } = prepareRows(
+      [{ Phone: '' }, { Phone: '0600111222' }, { Phone: '34600111222' }],
+      mapping,
+      1000
+    )
+    expect(prepared).toHaveLength(1)
+    expect(errors).toEqual([
+      { row: 1002, phone: '', reason: 'Phone is empty' },
+      { row: 1003, phone: '0600111222', reason: 'Missing country code (starts with 0)' },
+    ])
+  })
+
+  it('collapses rows that are the same person and unions their data', () => {
+    // Two rows, one human: a second INSERT would create the duplicate the
+    // import promises not to. First non-empty value wins, tags union.
+    const { prepared, errors, duplicates } = prepareRows(
+      [
+        { Phone: '34600111222', Name: '', Tag: 'VIP' },
+        { Phone: '600111222', Name: 'Ana', Email: 'a@b.c', Tag: 'vip; Madrid' },
+      ],
+      mapping
+    )
+    expect(errors).toEqual([])
+    expect(duplicates).toBe(1)
+    expect(prepared).toHaveLength(1)
+    expect(prepared[0].digits).toBe('34600111222')
+    expect(prepared[0].seed).toEqual({ name: 'Ana', email: 'a@b.c' })
+    expect(prepared[0].tagNames).toEqual(['VIP', 'Madrid'])
+  })
+
+  it('never lets a mapping write outside the allow-listed columns', () => {
+    // The mapping comes from the browser and the bulk insert spreads the
+    // seed into the row — a crafted mapping must not reach opt_in_status.
+    const { prepared } = prepareRows(
+      [{ Phone: '34600111222', Evil: 'opted_in' }],
+      { Phone: 'phone', Evil: 'opt_in_status' }
+    )
+    expect(prepared[0].seed).toEqual({})
+  })
+
+  it('matches stored contacts by exact digits or last-8, like phonesMatch', () => {
+    const index = phoneIndex([{ id: 'a', phone: '34600111222' }, { id: 'b', phone: '1234567' }])
+    expect(index.get(phoneKey('34600111222'))?.id).toBe('a')
+    expect(index.get(phoneKey('600111222'))?.id).toBe('a') // country code missing in the CSV
+    expect(index.get(phoneKey('1234567'))?.id).toBe('b') // short numbers match exactly only
+    expect(index.get(phoneKey('99999999'))).toBeUndefined()
+  })
+
+  it('backfills only the fields the stored contact is missing', () => {
+    expect(
+      backfillPatch({ name: 'Ana', email: null }, { name: 'Anna', email: 'a@b.c', city: 'Madrid' })
+    ).toEqual({ email: 'a@b.c', city: 'Madrid' })
+  })
+
+  it('chunks without losing rows', () => {
+    expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
+    expect(chunk([], 2)).toEqual([])
+  })
+
+  it('keeps the import bulk — no per-row round trips', () => {
+    // 3 sequential queries × 5,000 rows was the whole disease: minutes of
+    // wall clock, then a mid-file death past the function's time limit.
+    const route = readFileSync(join(process.cwd(), 'src/app/api/contacts/import/route.ts'), 'utf8')
+    expect(route).not.toContain('findOrCreateContact')
+    expect(route).toContain('prepareRows')
+    expect(route).toContain("ignoreDuplicates: true")
   })
 })
 

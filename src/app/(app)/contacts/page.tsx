@@ -645,6 +645,7 @@ function ImportModal({
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [tagAll, setTagAll] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState(0) // data rows already sent
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState('')
 
@@ -697,22 +698,86 @@ function ImportModal({
     setMapping(guess)
   }
 
+  /**
+   * The file goes up in slices, not one giant request. A single request
+   * holding thousands of rows was the old failure mode: past the function's
+   * time limit it died mid-file, half imported, no report. Slices keep every
+   * request small, survive a flaky connection (each retries on its own), and
+   * make the progress bar honest.
+   */
+  const SLICE = 1000
+
   async function run() {
     setError('')
     setBusy(true)
+    setProgress(0)
+
+    const totals = { created: 0, merged: 0, skipped: 0, errors: [] as any[], tagsCreated: 0, tagWarning: null as string | null }
+    let jobId: string | null = null
+
     try {
-      const res = await fetch('/api/contacts/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows, mapping, tag_ids: tagAll }),
-      })
-      const json = await res.json()
-      if (!res.ok) {
-        setError(json.error)
-        return
+      for (let offset = 0; offset < rows.length; offset += SLICE) {
+        const slice = rows.slice(offset, offset + SLICE)
+        let done = false
+        let lastError = ''
+
+        for (let attempt = 0; attempt < 3 && !done; attempt++) {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * 2 ** (attempt - 1)))
+          try {
+            const res: Response = await fetch('/api/contacts/import', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                rows: slice,
+                mapping,
+                tag_ids: tagAll,
+                job_id: jobId,
+                row_offset: offset,
+                total_rows: rows.length,
+                final: offset + SLICE >= rows.length,
+              }),
+            })
+            const json: any = await res.json()
+            if (!res.ok) {
+              lastError = json.error ?? `HTTP ${res.status}`
+              // A 4xx repeats identically on every retry AND every later
+              // slice (bad mapping, say) — stop the whole import and say why.
+              if (res.status < 500) {
+                setError(lastError)
+                return
+              }
+              continue
+            }
+            jobId = json.job_id ?? jobId
+            totals.created += json.created ?? 0
+            totals.merged += json.merged ?? 0
+            totals.skipped += json.skipped ?? 0
+            totals.errors.push(...(json.errors ?? []))
+            totals.tagsCreated += json.tagsCreated ?? 0
+            if (json.tagWarning) totals.tagWarning = json.tagWarning
+            done = true
+          } catch {
+            lastError = 'Network error'
+          }
+        }
+
+        if (!done) {
+          // Three failures for this slice — report its rows and carry on, so
+          // one bad patch of network doesn't waste the rest of the file.
+          totals.skipped += slice.length
+          totals.errors.push({
+            row: offset + 2,
+            phone: '—',
+            reason: `Rows ${offset + 2}–${offset + slice.length + 1} failed after 3 attempts: ${lastError}`,
+          })
+        }
+
+        setProgress(Math.min(offset + SLICE, rows.length))
       }
-      setResult(json)
-      onDone(json)
+
+      totals.errors = totals.errors.slice(0, 100)
+      setResult(totals)
+      onDone(totals)
     } finally {
       setBusy(false)
     }
@@ -723,7 +788,9 @@ function ImportModal({
   return (
     <Modal
       open
-      onClose={onClose}
+      // Closing mid-import would orphan the upload loop with no way to see
+      // how far it got — the bar has to finish (or fail) first.
+      onClose={busy ? () => {} : onClose}
       title="Import contacts from CSV"
       width={640}
       footer={
@@ -733,7 +800,9 @@ function ImportModal({
           </Button>
         ) : (
           <>
-            <Button onClick={onClose}>Cancel</Button>
+            <Button onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
             <Button variant="primary" loading={busy} onClick={run} disabled={!rows.length || !hasPhone}>
               Import {rows.length ? `${num(rows.length)} rows` : ''}
             </Button>
@@ -893,6 +962,26 @@ function ImportModal({
                 </div>
               )}
             </>
+          )}
+
+          {busy && (
+            <div className="mt-4">
+              <div className="mb-1.5 flex items-center justify-between text-[12px]" style={{ color: 'var(--w-muted)' }}>
+                <span>Importing — keep this window open…</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {num(progress)} / {num(rows.length)}
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full" style={{ background: 'var(--w-card2)' }}>
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${rows.length ? Math.round((progress / rows.length) * 100) : 0}%`,
+                    background: '#16A34A',
+                  }}
+                />
+              </div>
+            </div>
           )}
 
           {error && (
