@@ -242,8 +242,8 @@ export function templateBlockReason(t: any): string | null {
   if ((t.header_text ?? '').includes('{{')) {
     return 'Has a variable in its header — broadcasts can only fill body variables.'
   }
-  if ((t.buttons ?? []).some((b: any) => b?.dynamic || b?.kind === 'copy_code')) {
-    return 'Has a dynamic link or coupon button that needs a per-send value — broadcasts cannot supply it.'
+  if ((t.buttons ?? []).some((b: any) => b?.dynamic)) {
+    return 'Has a dynamic link button that needs a per-send value — broadcasts cannot supply it.'
   }
   if (/\{\{\s*[A-Za-z_]/.test(t.body_text ?? '')) {
     return 'Uses named variables ({{name}} style) — recreate it with numbered ones ({{1}}, {{2}}).'
@@ -297,6 +297,16 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
     setBindings(Array.from({ length: varCount }, () => ({ kind: 'static', value: '' })))
   }, [varCount])
 
+  // A "copy code" coupon button needs the code on every send — Meta treats
+  // the code in the template editor as a review example only. Prefill from
+  // the synced template; the merchant can override per campaign.
+  const copyCodeButton = ((template as any)?.buttons ?? []).find((b: any) => b?.kind === 'copy_code')
+  const [couponCode, setCouponCode] = useState('')
+  useEffect(() => {
+    setCouponCode(copyCodeButton?.code ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [template?.id])
+
   // Refresh the audience estimate whenever the selection changes.
   useEffect(() => {
     if (step !== 1) return
@@ -335,7 +345,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
           template_name: template?.name,
           template_language: template?.language,
           audience,
-          variable_map: { body: bindings },
+          variable_map: { body: bindings, coupon_code: couponCode.trim() || undefined },
           scheduled_at: scheduledAt || null,
         }),
       })
@@ -355,7 +365,8 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   // Every variable must have a value. A blank one is not "no personalisation":
   // Meta rejects the send outright with #132012, once per recipient.
   const unfilled = bindings.findIndex((b) => !String(b.value ?? '').trim())
-  const canNext = [!!template, !!estimate?.sendable, unfilled < 0, !!name.trim()][step]
+  const couponMissing = !!copyCodeButton && !couponCode.trim()
+  const canNext = [!!template, !!estimate?.sendable, unfilled < 0 && !couponMissing, !!name.trim()][step]
 
   return (
     <Modal
@@ -537,9 +548,11 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       {step === 2 && (
         <>
           {varCount === 0 ? (
-            <div className="text-[13px]" style={{ color: 'var(--w-muted)' }}>
-              This template has no variables — nothing to personalise.
-            </div>
+            copyCodeButton ? null : (
+              <div className="text-[13px]" style={{ color: 'var(--w-muted)' }}>
+                This template has no variables — nothing to personalise.
+              </div>
+            )
           ) : (
             <>
             {unfilled >= 0 && (
@@ -606,6 +619,18 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
               of Full name — &ldquo;Gary Elms&rdquo; becomes &ldquo;Gary&rdquo;.
             </div>
             </>
+          )}
+
+          {copyCodeButton && (
+            <div className="mt-3">
+              <Input
+                label={`Coupon code — for the "${copyCodeButton.text ?? 'Copy code'}" button`}
+                value={couponCode}
+                onChange={(e) => setCouponCode(e.target.value)}
+                placeholder="SUM50"
+                hint="Meta requires the code on every send; the one typed in the template editor is only a review sample. It is prefilled from the template when available."
+              />
+            </div>
           )}
 
           <div className="mt-3 text-[12.5px] font-medium">Preview</div>

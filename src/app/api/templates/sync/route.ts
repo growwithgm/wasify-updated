@@ -15,7 +15,7 @@ type MetaTemplate = {
     type: string
     format?: string
     text?: string
-    buttons?: Array<{ type: string; text: string; url?: string; phone_number?: string }>
+    buttons?: Array<{ type: string; text: string; url?: string; phone_number?: string; example?: string | string[] }>
     example?: Record<string, any>
   }>
   quality_score?: { score?: string }
@@ -117,6 +117,12 @@ function parseComponents(tpl: MetaTemplate) {
     phone: b.phone_number ?? undefined,
     // A URL containing {{1}} is a Dynamic URL — the app supplies only a suffix.
     dynamic: b.type === 'URL' && !!b.url?.includes('{{1}}'),
+    // For COPY_CODE, the code typed in Meta's editor arrives as the example.
+    // Meta still wants it as a send-time parameter; this prefills our UI.
+    code:
+      b.type === 'COPY_CODE'
+        ? ((Array.isArray(b.example) ? b.example[0] : b.example) ?? undefined)
+        : undefined,
   }))
 
   return {

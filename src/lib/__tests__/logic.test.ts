@@ -1444,10 +1444,12 @@ describe('broadcast shape safety', () => {
     expect(templateBlockReason({ ...ok, header_type: 'image' })).toContain('header')
     expect(templateBlockReason({ ...ok, header_text: 'Deal {{1}}', header_type: 'text' })).toContain('header')
     expect(templateBlockReason({ ...ok, buttons: [{ kind: 'url', dynamic: true }] })).toContain('button')
-    expect(templateBlockReason({ ...ok, buttons: [{ kind: 'copy_code' }] })).toContain('button')
     expect(templateBlockReason({ ...ok, body_text: 'Hi {{first_name}}' })).toContain('named')
     // Static URL and quick-reply buttons need no per-send value — fine.
     expect(templateBlockReason({ ...ok, buttons: [{ kind: 'url', dynamic: false }, { kind: 'quick_reply' }] })).toBeNull()
+    // Copy-code coupon buttons ARE usable now — the wizard collects the code
+    // and the send carries it, so the picker must not turn these away.
+    expect(templateBlockReason({ ...ok, buttons: [{ kind: 'copy_code', code: 'SUM50' }] })).toBeNull()
   })
 
   it('lets the merchant pull the brake mid-campaign', () => {
@@ -1461,6 +1463,24 @@ describe('broadcast shape safety', () => {
     expect(engine).toContain("fresh?.status !== 'sending'") // honoured mid-batch, not just between ticks
     const page = readFileSync(join(process.cwd(), 'src/app/(app)/broadcasts/page.tsx'), 'utf8')
     expect(page).toContain('Pause campaign') // the button lives in the delivery report too
+  })
+
+  it('carries the coupon of a copy-code button on every send', () => {
+    // summer_sale_26: "Copy offer code SUM50" — a fixed code to the merchant,
+    // but Meta treats the editor's code as a review sample and demands it as
+    // a parameter on EVERY send. Missing it is #131008 for all 809.
+    const shape = templateShape([
+      { type: 'BODY', text: 'Hi {{1}}' },
+      { type: 'BUTTONS', buttons: [{ type: 'COPY_CODE', text: 'Copy offer code', example: 'SUM50' }, { type: 'URL', text: 'Visit', url: 'https://ibban.com/x' }] },
+    ])
+    expect(shape.copyCodeButtons).toEqual([0])
+    expect(shape.dynamicUrlButtons).toEqual([]) // static URL needs nothing
+    expect(paramMismatch(shape, ['Ana'])).toMatch(/coupon/i) // no code supplied → refused before Meta
+    expect(paramMismatch(shape, ['Ana'], { couponCodes: 1 })).toBeNull()
+
+    const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
+    expect(engine).toContain("sub_type: 'copy_code'")
+    expect(engine).toContain('coupon_code')
   })
 
   it('gates every send path on a fresh template shape and trips a breaker', () => {
@@ -1501,7 +1521,7 @@ describe('template parameters', () => {
       { type: 'BODY', text: 'Hi {{1}}, total {{2}}' },
       { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Yes' }, { type: 'URL', text: 'Pay', url: 'https://x.com/{{1}}' }] },
     ])
-    expect(shape).toEqual({ headerFormat: 'TEXT', headerVars: 1, bodyVars: 2, dynamicUrlButtons: [1] })
+    expect(shape).toEqual({ headerFormat: 'TEXT', headerVars: 1, bodyVars: 2, dynamicUrlButtons: [1], copyCodeButtons: [] })
   })
 
   it('accepts a template whose parameters line up', () => {

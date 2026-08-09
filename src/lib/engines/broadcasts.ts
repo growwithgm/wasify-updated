@@ -55,7 +55,13 @@ export async function broadcastShapeProblem(broadcast: any): Promise<string | nu
   }
 
   const bindings = broadcast.variable_map?.body ?? []
-  return paramMismatch(templateShape(tpl.components), Array(bindings.length).fill('x'))
+  const coupon = String(broadcast.variable_map?.coupon_code ?? '').trim()
+  const shape = templateShape(tpl.components)
+  return paramMismatch(shape, Array(bindings.length).fill('x'), {
+    // One coupon fills every copy-code button; zero means the wizard never
+    // collected one and the mismatch text says exactly that.
+    couponCodes: coupon ? shape.copyCodeButtons.length : 0,
+  })
 }
 
 /** Resolve the audience into concrete recipient rows. */
@@ -199,12 +205,15 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
   }
 
   const bindings: VariableBinding[] = broadcast.variable_map?.body ?? []
+  const coupon = String(broadcast.variable_map?.coupon_code ?? '').trim()
   const shape = templateShape(tpl.components)
 
   // A shape mismatch is the same for every recipient, so check it against the
   // template ONCE. Without this the run marches through the whole audience
   // collecting an identical #132012 per person.
-  const structural = paramMismatch(shape, Array(bindings.length).fill('x'))
+  const structural = paramMismatch(shape, Array(bindings.length).fill('x'), {
+    couponCodes: coupon ? shape.copyCodeButtons.length : 0,
+  })
   if (structural) {
     await db
       .from('broadcasts')
@@ -258,7 +267,9 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
     // Per-recipient values can still come back blank — a contact_field binding
     // on someone with no first name, say. Meta rejects a blank parameter, so
     // skip that person rather than burning a send that cannot succeed.
-    const perRecipient = paramMismatch(shape, vars)
+    const perRecipient = paramMismatch(shape, vars, {
+      couponCodes: coupon ? shape.copyCodeButtons.length : 0,
+    })
     if (perRecipient) {
       await db
         .from('broadcast_recipients')
@@ -272,13 +283,28 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
       continue
     }
 
+    const components: any[] = []
+    if (vars.length) {
+      components.push({ type: 'body', parameters: vars.map((t) => ({ type: 'text' as const, text: t })) })
+    }
+    // A copy-code button's coupon is a per-send parameter even when the code
+    // never changes — the code in Meta's editor is only the review example.
+    for (const index of shape.copyCodeButtons) {
+      if (coupon) {
+        components.push({
+          type: 'button',
+          sub_type: 'copy_code',
+          index: String(index),
+          parameters: [{ type: 'coupon_code', coupon_code: coupon }],
+        })
+      }
+    }
+
     const res = await sendWhatsApp(userId, recipient.phone, {
       kind: 'template',
       name: tpl.name,
       language: tpl.language,
-      components: vars.length
-        ? [{ type: 'body', parameters: vars.map((t) => ({ type: 'text' as const, text: t })) }]
-        : undefined,
+      components: components.length ? components : undefined,
     })
 
     await db

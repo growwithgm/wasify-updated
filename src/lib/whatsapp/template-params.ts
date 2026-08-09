@@ -17,6 +17,12 @@ export type TemplateShape = {
   bodyVars: number
   /** Positional index within the BUTTONS block for each URL button taking a suffix. */
   dynamicUrlButtons: number[]
+  /**
+   * Positional index of each "copy code" coupon button. The code typed in
+   * Meta's editor is only an EXAMPLE — every send must carry the real coupon
+   * as a button parameter, or Meta rejects it with #131008.
+   */
+  copyCodeButtons: number[]
 }
 
 /** Highest {{n}} in a string — the count Meta expects, not the number of distinct uses. */
@@ -52,6 +58,9 @@ export function templateShape(components: any): TemplateShape {
     dynamicUrlButtons: (buttons?.buttons ?? [])
       .map((b: any, i: number) => (String(b?.type).toUpperCase() === 'URL' && countVariables(b?.url) > 0 ? i : -1))
       .filter((i: number) => i >= 0),
+    copyCodeButtons: (buttons?.buttons ?? [])
+      .map((b: any, i: number) => (String(b?.type).toUpperCase() === 'COPY_CODE' ? i : -1))
+      .filter((i: number) => i >= 0),
   }
 }
 
@@ -65,7 +74,7 @@ export function templateShape(components: any): TemplateShape {
 export function paramMismatch(
   shape: TemplateShape,
   bodyValues: string[],
-  opts: { hasHeaderValue?: boolean; urlSuffixes?: number } = {}
+  opts: { hasHeaderValue?: boolean; urlSuffixes?: number; couponCodes?: number } = {}
 ): string | null {
   if (bodyValues.length !== shape.bodyVars) {
     return `This template expects ${shape.bodyVars} variable${shape.bodyVars === 1 ? '' : 's'} in its body, but ${bodyValues.length} ${bodyValues.length === 1 ? 'was' : 'were'} supplied.`
@@ -89,6 +98,13 @@ export function paramMismatch(
     return `This template has ${shape.dynamicUrlButtons.length} button(s) with a dynamic URL, but ${suffixes} link value(s) were supplied.`
   }
 
+  const coupons = opts.couponCodes ?? 0
+  if (shape.copyCodeButtons.length !== coupons) {
+    return shape.copyCodeButtons.length > coupons
+      ? `This template has a "copy code" coupon button — Meta needs the coupon code on every send, and none was supplied.`
+      : `A coupon code was supplied, but this template has no "copy code" button.`
+  }
+
   return null
 }
 
@@ -99,6 +115,7 @@ export function describeShape(shape: TemplateShape): string {
   if (shape.headerFormat === 'TEXT' && shape.headerVars > 0) parts.push(`${shape.headerVars} header variable(s)`)
   else if (shape.headerFormat && shape.headerFormat !== 'TEXT') parts.push(`${shape.headerFormat.toLowerCase()} header`)
   if (shape.dynamicUrlButtons.length) parts.push(`${shape.dynamicUrlButtons.length} dynamic URL button(s)`)
+  if (shape.copyCodeButtons.length) parts.push(`${shape.copyCodeButtons.length} coupon button(s)`)
   return parts.join(', ')
 }
 

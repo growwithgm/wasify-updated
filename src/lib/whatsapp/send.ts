@@ -4,12 +4,13 @@ import { createServiceClient } from '@/lib/supabase/server'
 
 export type TemplateComponent = {
   type: 'header' | 'body' | 'button'
-  sub_type?: 'url' | 'quick_reply'
+  sub_type?: 'url' | 'quick_reply' | 'copy_code'
   index?: string
   parameters?: Array<
     | { type: 'text'; text: string }
     | { type: 'image'; image: { link: string } }
     | { type: 'currency'; currency: { fallback_value: string; code: string; amount_1000: number } }
+    | { type: 'coupon_code'; coupon_code: string }
   >
 }
 
