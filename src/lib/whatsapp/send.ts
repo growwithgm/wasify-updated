@@ -148,6 +148,47 @@ export async function sendWhatsApp(userId: string, to: string, payload: SendPayl
  * confirm it is Approved before sending. Sending an unsynced or stale
  * name is the usual cause of Meta #132001.
  */
+/**
+ * Re-pull ONE template from Meta so a pre-send shape check runs against what
+ * Meta will actually enforce, not a possibly week-old synced copy — a
+ * template edited after the last sync is exactly how a broadcast that passed
+ * every local check still dies per-recipient with #131008.
+ *
+ * Best-effort by design: on any failure the caller simply checks the synced
+ * rows, which is no worse than before this existed.
+ */
+export async function refreshTemplateFromMeta(userId: string, name: string): Promise<void> {
+  try {
+    const config = await getWhatsAppConfig(userId)
+    if (!config?.waba_id) return
+
+    const res = await graphFetch<{ data: any[] }>(`${config.waba_id}/message_templates`, config.token, {
+      query: { name, fields: 'id,name,language,status,category,components' },
+    })
+    if (!res.ok) return
+
+    const db = createServiceClient()
+    for (const tpl of res.data.data ?? []) {
+      if (tpl.name !== name) continue // Meta's name filter can prefix-match
+      await db.from('message_templates').upsert(
+        {
+          user_id: userId,
+          name: tpl.name,
+          language: tpl.language,
+          category: (tpl.category ?? 'MARKETING').toUpperCase(),
+          status: (tpl.status ?? 'PENDING').toUpperCase(),
+          meta_template_id: tpl.id,
+          components: tpl.components ?? null,
+          synced_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,name,language' }
+      )
+    }
+  } catch (e) {
+    console.error('[templates] single-template refresh failed', e)
+  }
+}
+
 export async function resolveApprovedTemplate(userId: string, name: string, preferredLang?: string) {
   const db = createServiceClient()
   const { data } = await db

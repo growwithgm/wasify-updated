@@ -204,6 +204,32 @@ const CONTACT_FIELDS = [
   { key: 'orders_count', label: 'Order count' },
 ]
 
+/**
+ * Why a template cannot be used in a broadcast, or null if it can.
+ *
+ * Broadcasts fill body variables and nothing else. A template that also
+ * demands a media header, a header variable, a dynamic-URL or coupon button,
+ * or uses NAMED {{variables}} would pass the wizard and then fail on every
+ * single recipient with #131008 — so it is refused at the picker, with the
+ * reason on the card.
+ */
+export function templateBlockReason(t: any): string | null {
+  const headerType = (t.header_type ?? 'none').toLowerCase()
+  if (headerType !== 'none' && headerType !== 'text') {
+    return `Has a ${headerType} header — broadcasts cannot attach the media for it yet.`
+  }
+  if ((t.header_text ?? '').includes('{{')) {
+    return 'Has a variable in its header — broadcasts can only fill body variables.'
+  }
+  if ((t.buttons ?? []).some((b: any) => b?.dynamic || b?.kind === 'copy_code')) {
+    return 'Has a dynamic link or coupon button that needs a per-send value — broadcasts cannot supply it.'
+  }
+  if (/\{\{\s*[A-Za-z_]/.test(t.body_text ?? '')) {
+    return 'Uses named variables ({{name}} style) — recreate it with numbered ones ({{1}}, {{2}}).'
+  }
+  return null
+}
+
 function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [step, setStep] = useState(0)
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
@@ -216,6 +242,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   const [bindings, setBindings] = useState<Array<{ kind: string; value: string }>>([])
   const [scheduledAt, setScheduledAt] = useState('')
   const [estimate, setEstimate] = useState<any>(null)
+  const [fieldCounts, setFieldCounts] = useState<Record<string, number> | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -224,12 +251,21 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       fetch('/api/templates').then((r) => r.json()),
       fetch('/api/tags').then((r) => r.json()),
       fetch('/api/segments').then((r) => r.json()),
-    ]).then(([t, g, s]) => {
+      fetch('/api/contacts/fields').then((r) => r.json()).catch(() => null),
+    ]).then(([t, g, s, f]) => {
       setTemplates((t.templates ?? []).filter((x: MessageTemplate) => x.status === 'APPROVED'))
       setTags(g.tags ?? [])
       setSegments(s.segments ?? [])
+      setFieldCounts(f?.fields ?? null)
     })
   }, [])
+
+  // Offer only fields the contacts actually hold — an all-empty field would
+  // blank the variable and fail every recipient. Until (or unless) the
+  // counts arrive, offer everything rather than nothing.
+  const availableFields = CONTACT_FIELDS.filter(
+    (f) => !fieldCounts || (fieldCounts[f.key] ?? 0) > 0
+  )
 
   const varCount = useMemo(() => {
     const found = [...(template?.body_text ?? '').matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]))
@@ -348,30 +384,41 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
               allows template messages for campaigns.
             </div>
           ) : (
-            templates.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTemplate(t)}
-                className="mb-1.5 block w-full cursor-pointer rounded-lg border p-3 text-left"
-                style={{
-                  background: template?.id === t.id ? 'var(--w-greentint)' : 'var(--w-card2)',
-                  borderColor: template?.id === t.id ? '#BBF7D0' : 'var(--w-border)',
-                }}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[13px] font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                    {t.name}
-                  </span>
-                  <span className="flex gap-1.5">
-                    <Pill tone="gray">{t.language}</Pill>
-                    <Pill tone="blue">{t.category}</Pill>
-                  </span>
-                </div>
-                <div className="mt-1 line-clamp-2 text-[12px]" style={{ color: 'var(--w-muted)' }}>
-                  {t.body_text}
-                </div>
-              </button>
-            ))
+            templates.map((t) => {
+              const blocked = templateBlockReason(t)
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => !blocked && setTemplate(t)}
+                  disabled={!!blocked}
+                  className="mb-1.5 block w-full rounded-lg border p-3 text-left"
+                  style={{
+                    background: template?.id === t.id ? 'var(--w-greentint)' : 'var(--w-card2)',
+                    borderColor: template?.id === t.id ? '#BBF7D0' : 'var(--w-border)',
+                    opacity: blocked ? 0.55 : 1,
+                    cursor: blocked ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13px] font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                      {t.name}
+                    </span>
+                    <span className="flex gap-1.5">
+                      <Pill tone="gray">{t.language}</Pill>
+                      <Pill tone="blue">{t.category}</Pill>
+                    </span>
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-[12px]" style={{ color: 'var(--w-muted)' }}>
+                    {t.body_text}
+                  </div>
+                  {blocked && (
+                    <div className="mt-1.5 text-[11.5px] font-medium" style={{ color: '#B45309' }}>
+                      Not usable in broadcasts: {blocked}
+                    </div>
+                  )}
+                </button>
+              )
+            })
           )}
         </>
       )}
@@ -523,15 +570,20 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
                     style={{ background: 'var(--w-card)', borderColor: 'var(--w-border)' }}
                   >
                     <option value="">Pick a field…</option>
-                    {CONTACT_FIELDS.map((f) => (
+                    {availableFields.map((f) => (
                       <option key={f.key} value={f.key}>
                         {f.label}
+                        {fieldCounts ? ` — ${num(fieldCounts[f.key] ?? 0)} contacts have it` : ''}
                       </option>
                     ))}
                   </select>
                 )}
               </div>
             ))}
+            <div className="mt-1 text-[11.5px]" style={{ color: 'var(--w-muted)' }}>
+              Only fields your contacts actually have are listed. <b>First name</b> is the first word
+              of Full name — &ldquo;Gary Elms&rdquo; becomes &ldquo;Gary&rdquo;.
+            </div>
             </>
           )}
 

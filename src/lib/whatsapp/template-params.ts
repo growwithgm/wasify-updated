@@ -25,6 +25,18 @@ export function countVariables(text: string | null | undefined): number {
   return found.length ? Math.max(...found) : 0
 }
 
+/**
+ * NAMED placeholders — {{first_name}} instead of {{1}}.
+ *
+ * Meta's template builder can create these, and they are invisible to every
+ * numeric check here: countVariables sees 0, the send carries 0 parameters,
+ * and Meta rejects each message with #131008 "Required parameter is missing".
+ * Callers that only speak positional parameters must detect and refuse them.
+ */
+export function namedVariables(text: string | null | undefined): string[] {
+  return [...(text ?? '').matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1])
+}
+
 export function templateShape(components: any): TemplateShape {
   const list: any[] = Array.isArray(components) ? components : []
   const header = list.find((c) => String(c?.type).toUpperCase() === 'HEADER')
@@ -92,6 +104,10 @@ export function describeShape(shape: TemplateShape): string {
 
 /** Meta error codes worth translating — the raw text sends people in circles. */
 export const META_ERROR_HINTS: Record<string, string> = {
+  '131008':
+    'The approved template expects more values than were sent — usually it was edited on Meta after ' +
+    'the last sync, has a header/button variable, or uses named {{variables}}. ' +
+    'Run Templates → Sync from Meta and rebuild this campaign.',
   '132012':
     'The variables sent did not match the approved template — usually a missing or blank value, ' +
     'or a template whose header or button also needs one.',

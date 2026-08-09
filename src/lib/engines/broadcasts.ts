@@ -1,8 +1,13 @@
-import { sendWhatsApp, resolveApprovedTemplate } from '@/lib/whatsapp/send'
+import { sendWhatsApp, resolveApprovedTemplate, refreshTemplateFromMeta } from '@/lib/whatsapp/send'
 import { phonesMatch, sanitizePhone } from '@/lib/phone'
 import { evaluateSegment } from './segments'
 import { logActivity, notify } from '@/lib/contacts'
-import { templateShape, paramMismatch, explainMetaError } from '@/lib/whatsapp/template-params'
+import {
+  templateShape,
+  paramMismatch,
+  explainMetaError,
+  namedVariables,
+} from '@/lib/whatsapp/template-params'
 import { chunk } from '@/lib/contacts-import'
 import { allPages } from '@/lib/db-pages'
 
@@ -17,6 +22,41 @@ import { allPages } from '@/lib/db-pages'
 const BATCH = 50 // recipients per cron pass, keeps us inside the lambda budget
 
 export type VariableBinding = { kind: 'static' | 'contact_field' | 'custom_field'; value: string }
+
+/**
+ * Why this broadcast cannot send, or null if it can — checked against a
+ * FRESH copy of the template pulled from Meta moments before.
+ *
+ * Broadcasts fill body variables and nothing else, so any template demanding
+ * more — a media header, a header variable, a dynamic URL or coupon button,
+ * named {{variables}} — has to be refused HERE, by name. Letting it through
+ * means Meta rejects every single recipient with #131008 and the report is
+ * 809 identical red rows.
+ */
+export async function broadcastShapeProblem(broadcast: any): Promise<string | null> {
+  await refreshTemplateFromMeta(broadcast.user_id, broadcast.template_name)
+
+  const tpl = await resolveApprovedTemplate(
+    broadcast.user_id,
+    broadcast.template_name,
+    broadcast.template_language
+  )
+  if (!tpl) {
+    return `Template "${broadcast.template_name}" is not Approved on Meta (it may have been edited or deleted). Run Templates → Sync from Meta.`
+  }
+
+  const components: any[] = Array.isArray(tpl.components) ? tpl.components : []
+  const texts = components
+    .flatMap((c: any) => [c?.text, ...((c?.buttons ?? []).map((b: any) => b?.url) ?? [])])
+    .filter(Boolean)
+  const named = [...new Set(texts.flatMap((t: string) => namedVariables(t)))]
+  if (named.length) {
+    return `This template uses NAMED variables ({{${named[0]}}}) which broadcasts cannot fill — recreate it on Meta with numbered variables ({{1}}, {{2}}).`
+  }
+
+  const bindings = broadcast.variable_map?.body ?? []
+  return paramMismatch(templateShape(tpl.components), Array(bindings.length).fill('x'))
+}
 
 /** Resolve the audience into concrete recipient rows. */
 export async function buildRecipients(db: any, userId: string, broadcast: any) {
@@ -179,6 +219,13 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
     return 0
   }
 
+  // Shape-family rejections (#131008/#132000/#132012/#132001) are identical
+  // for every recipient — the template itself disagrees with what we send.
+  // After a few in a row, marching on just paints hundreds of identical red
+  // rows, so the run trips a breaker instead.
+  const SHAPE_CODES = new Set(['131008', '132000', '132001', '132012'])
+  let shapeFailStreak = 0
+
   for (const recipient of queued) {
     // Consent is re-read here, not just when the audience was built. A large
     // broadcast drains over many cron passes, and someone who replies STOP
@@ -234,6 +281,29 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
             }
       )
       .eq('id', recipient.id)
+
+    if (!res.ok && SHAPE_CODES.has(String(res.code))) {
+      if (++shapeFailStreak >= 5) {
+        const reason = explainMetaError(res.error, res.code)
+        await db
+          .from('broadcast_recipients')
+          .update({
+            status: 'failed',
+            error_message: `Stopped — the first sends all failed the same way: ${reason}`,
+            error_code: String(res.code),
+          })
+          .eq('broadcast_id', broadcast.id)
+          .eq('status', 'queued')
+        await db
+          .from('broadcasts')
+          .update({ status: 'failed', completed_at: new Date().toISOString() })
+          .eq('id', broadcast.id)
+        await notify(db, userId, 'error', `Broadcast "${broadcast.name}" stopped: ${reason}`, '/broadcasts')
+        return queued.length
+      }
+    } else if (res.ok) {
+      shapeFailStreak = 0
+    }
   }
 
   return queued.length
@@ -267,6 +337,16 @@ export async function sendDueBroadcasts(db: any): Promise<{ started: number; sen
     .limit(10)
 
   for (const broadcast of due ?? []) {
+    // Last call before real money and real quality rating: check the shape
+    // against a template freshly pulled from Meta. Edited-since-sync is
+    // caught here, not 809 times in the delivery report.
+    const problem = await broadcastShapeProblem(broadcast)
+    if (problem) {
+      await db.from('broadcasts').update({ status: 'failed', completed_at: now }).eq('id', broadcast.id)
+      await notify(db, broadcast.user_id, 'error', `Broadcast "${broadcast.name}" failed: ${problem}`, '/broadcasts')
+      continue
+    }
+
     // One broadcast whose audience cannot be resolved must fail LOUDLY and
     // ALONE — marked failed with a notification, while the rest still go out.
     let recipients: Awaited<ReturnType<typeof buildRecipients>>

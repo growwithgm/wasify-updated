@@ -26,7 +26,10 @@ import {
   templateShape,
   paramMismatch,
   explainMetaError,
+  namedVariables,
+  META_ERROR_HINTS,
 } from '@/lib/whatsapp/template-params'
+import { templateBlockReason } from '@/app/(app)/broadcasts/page'
 
 /* ------------------------------------------------------------------ */
 /* Phone rules — the dedupe path everything else depends on            */
@@ -1416,6 +1419,51 @@ describe('bulk CSV import', () => {
     expect(route).toContain('replace_tags')
     // The delete must stay scoped to the tenant and to re-tagged contacts.
     expect(route).toMatch(/\.delete\(\)\s*\.eq\('user_id', userId\)\s*\.in\('contact_id', part\)/)
+  })
+})
+
+describe('broadcast shape safety', () => {
+  it('detects named {{variables}} that positional sends cannot fill', () => {
+    // Meta's builder can mint {{first_name}}-style templates. countVariables
+    // sees 0 there, the send carries no parameters, and every recipient dies
+    // with #131008 "Required parameter is missing" — the exact 809-row
+    // failure the delivery report showed.
+    expect(namedVariables('Hi {{first_name}}, sale on {{1}}!')).toEqual(['first_name'])
+    expect(namedVariables('Hi {{1}}, {{2}} off')).toEqual([])
+    expect(namedVariables(null)).toEqual([])
+    expect(countVariables('Hi {{first_name}}')).toBe(0) // why the old checks missed it
+  })
+
+  it('names #131008 in plain language', () => {
+    expect(META_ERROR_HINTS['131008']).toContain('Sync from Meta')
+  })
+
+  it('refuses templates a broadcast cannot fill, at the picker', () => {
+    const ok = { header_type: 'none', header_text: null, body_text: 'Hi {{1}}', buttons: [] }
+    expect(templateBlockReason(ok)).toBeNull()
+    expect(templateBlockReason({ ...ok, header_type: 'image' })).toContain('header')
+    expect(templateBlockReason({ ...ok, header_text: 'Deal {{1}}', header_type: 'text' })).toContain('header')
+    expect(templateBlockReason({ ...ok, buttons: [{ kind: 'url', dynamic: true }] })).toContain('button')
+    expect(templateBlockReason({ ...ok, buttons: [{ kind: 'copy_code' }] })).toContain('button')
+    expect(templateBlockReason({ ...ok, body_text: 'Hi {{first_name}}' })).toContain('named')
+    // Static URL and quick-reply buttons need no per-send value — fine.
+    expect(templateBlockReason({ ...ok, buttons: [{ kind: 'url', dynamic: false }, { kind: 'quick_reply' }] })).toBeNull()
+  })
+
+  it('gates every send path on a fresh template shape and trips a breaker', () => {
+    const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
+    // Fresh pull from Meta before scheduled sends — edited-since-sync is the
+    // one drift no local validation can see.
+    expect(engine).toContain('refreshTemplateFromMeta')
+    expect(engine).toContain('broadcastShapeProblem')
+    // And if Meta still rejects, five identical shape errors stop the run
+    // instead of painting hundreds of identical red rows.
+    expect(engine).toContain('shapeFailStreak')
+
+    const create = readFileSync(join(process.cwd(), 'src/app/api/broadcasts/route.ts'), 'utf8')
+    expect(create).toContain('broadcastShapeProblem')
+    const send = readFileSync(join(process.cwd(), 'src/app/api/broadcasts/[id]/send/route.ts'), 'utf8')
+    expect(send).toContain('broadcastShapeProblem')
   })
 })
 

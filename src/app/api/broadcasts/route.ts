@@ -1,5 +1,5 @@
 import { withAuth, jsonBody, badRequest } from '@/lib/api'
-import { buildRecipients } from '@/lib/engines/broadcasts'
+import { buildRecipients, broadcastShapeProblem } from '@/lib/engines/broadcasts'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,6 +18,17 @@ export async function POST(request: Request) {
     const name = (body.name ?? '').trim()
     if (!name) badRequest('Campaign name is required')
     if (!body.template_name) badRequest('Pick an approved template')
+
+    // Refuse at creation, with the reason on screen — not per-recipient in a
+    // delivery report. This re-pulls the template from Meta first, so a
+    // template edited since the last sync is caught here too.
+    const problem = await broadcastShapeProblem({
+      user_id: userId,
+      template_name: body.template_name,
+      template_language: body.template_language ?? 'es',
+      variable_map: body.variable_map ?? {},
+    })
+    if (problem) badRequest(problem)
 
     const { data, error } = await supabase
       .from('broadcasts')

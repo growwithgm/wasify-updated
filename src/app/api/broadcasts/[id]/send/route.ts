@@ -1,6 +1,6 @@
 import { withAuth, badRequest } from '@/lib/api'
 import { createServiceClient } from '@/lib/supabase/server'
-import { buildRecipients, sendBroadcastBatch } from '@/lib/engines/broadcasts'
+import { buildRecipients, sendBroadcastBatch, broadcastShapeProblem } from '@/lib/engines/broadcasts'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -19,6 +19,11 @@ export async function POST(_request: Request, { params }: Params) {
     const { data: broadcast } = await supabase.from('broadcasts').select('*').eq('id', id).maybeSingle()
     if (!broadcast) badRequest('Broadcast not found')
     if (broadcast.status === 'sent') badRequest('This campaign has already finished')
+
+    // Same fresh-from-Meta shape gate the cron applies — a draft created
+    // before the template was edited must not slip through "Send now".
+    const problem = await broadcastShapeProblem(broadcast)
+    if (problem) badRequest(problem)
 
     const recipients = await buildRecipients(supabase, userId, broadcast)
     if (!recipients.length) badRequest('The selected audience is empty')
