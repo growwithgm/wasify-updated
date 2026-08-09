@@ -644,6 +644,7 @@ function ImportModal({
   const [headers, setHeaders] = useState<string[]>([])
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [tagAll, setTagAll] = useState<string[]>([])
+  const [replaceTags, setReplaceTags] = useState(false)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0) // data rows already sent
   const [result, setResult] = useState<any>(null)
@@ -731,6 +732,7 @@ function ImportModal({
                 rows: slice,
                 mapping,
                 tag_ids: tagAll,
+                replace_tags: replaceTags,
                 job_id: jobId,
                 row_offset: offset,
                 total_rows: rows.length,
@@ -961,6 +963,21 @@ function ImportModal({
                   </div>
                 </div>
               )}
+
+              <label className="mt-3 flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={replaceTags}
+                  onChange={(e) => setReplaceTags(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer"
+                  style={{ accentColor: '#16A34A' }}
+                />
+                <span className="text-[12.5px] leading-relaxed">
+                  <b>Replace existing tags.</b> A contact that gets a tag from this file loses its old
+                  tags and keeps only the new ones — use this when a re-upload moves people from one
+                  list to another. Rows without a tag leave their contact untouched.
+                </span>
+              </label>
             </>
           )}
 

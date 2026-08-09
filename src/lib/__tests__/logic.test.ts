@@ -1387,6 +1387,36 @@ describe('bulk CSV import', () => {
     expect(route).toContain('prepareRows')
     expect(route).toContain("ignoreDuplicates: true")
   })
+
+  it('filters by tag with a join, never a thousand-id URL', () => {
+    // A tag on 800 contacts turned .in('id', [...]) into a ~30 KB request
+    // URL — rejected as "Bad Request" on the Contacts page, and silently
+    // read as an audience of ZERO in the broadcast wizard, because the
+    // error was swallowed.
+    const contactsRoute = readFileSync(join(process.cwd(), 'src/app/api/contacts/route.ts'), 'utf8')
+    expect(contactsRoute).toContain('contact_tags!inner')
+    expect(contactsRoute).toContain('segment_members!inner')
+    expect(contactsRoute).not.toMatch(/\.in\('id', ids\)/)
+
+    const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
+    expect(engine).toContain('contact_tags!inner')
+    expect(engine).toContain('Audience query failed') // errors surface, not swallowed
+    expect(engine).toContain('allPages') // pages past PostgREST's 1,000-row cap
+
+    // Segments read whole tables into a snapshot — unpaged, a 1,700-contact
+    // tenant silently lost everyone past row 1,000 and the segment LOOKED
+    // computed. Every snapshot read must page.
+    const segments = readFileSync(join(process.cwd(), 'src/lib/engines/segments.ts'), 'utf8')
+    expect(segments).toContain('allPages')
+    expect(segments).not.toMatch(/data: contacts/) // the old unpaged shape
+  })
+
+  it('replace-tags mode clears old tags only for contacts the file re-tags', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/api/contacts/import/route.ts'), 'utf8')
+    expect(route).toContain('replace_tags')
+    // The delete must stay scoped to the tenant and to re-tagged contacts.
+    expect(route).toMatch(/\.delete\(\)\s*\.eq\('user_id', userId\)\s*\.in\('contact_id', part\)/)
+  })
 })
 
 /* ------------------------------------------------------------------ */

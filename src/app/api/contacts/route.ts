@@ -9,6 +9,12 @@ export const dynamic = 'force-dynamic'
 
 const PAGE_SIZE = 50
 
+/** An arbitrary sort param would reach PostgREST as a column name and 400. */
+const SORTABLE = new Set([
+  'created_at', 'name', 'phone', 'email', 'last_order_at',
+  'lifetime_spent', 'orders_count', 'avg_order_value', 'rfm_segment',
+])
+
 export async function GET(request: Request) {
   return withAuth(async ({ supabase, userId }) => {
     const url = new URL(request.url)
@@ -16,34 +22,27 @@ export async function GET(request: Request) {
     const page = Math.max(0, Number(url.searchParams.get('page') ?? 0))
     const segmentId = url.searchParams.get('segment')
     const tagId = url.searchParams.get('tag')
-    const sort = url.searchParams.get('sort') ?? 'created_at'
+    const sortParam = url.searchParams.get('sort') ?? 'created_at'
+    const sort = SORTABLE.has(sortParam) ? sortParam : 'created_at'
     const dir = url.searchParams.get('dir') === 'asc'
 
-    let ids: string[] | null = null
-
-    if (segmentId) {
-      const { data } = await supabase
-        .from('segment_members')
-        .select('contact_id')
-        .eq('segment_id', segmentId)
-      ids = (data ?? []).map((r: any) => r.contact_id)
-      if (!ids.length) return { contacts: [], total: 0, page, pageSize: PAGE_SIZE }
-    }
-
-    if (tagId) {
-      const { data } = await supabase.from('contact_tags').select('contact_id').eq('tag_id', tagId)
-      const tagged = (data ?? []).map((r: any) => r.contact_id)
-      ids = ids ? ids.filter((id) => tagged.includes(id)) : tagged
-      if (!ids.length) return { contacts: [], total: 0, page, pageSize: PAGE_SIZE }
-    }
+    // Filtering used to collect the matching contact ids first and pass them
+    // back through .in('id', [...]) — a tag on 800 contacts made a ~30 KB
+    // request URL, which the API rejects outright ("Bad Request"). Inner-join
+    // embeds filter on the server instead, so the URL stays the same size no
+    // matter how many contacts carry the tag.
+    const embeds = ['contact_tags(tag_id, tags:tag_id (id, name, color))']
+    if (tagId) embeds.push('tag_filter:contact_tags!inner(tag_id)')
+    if (segmentId) embeds.push('seg_filter:segment_members!inner(segment_id)')
 
     let query = supabase
       .from('contacts')
-      .select('*, contact_tags(tag_id, tags:tag_id (id, name, color))', { count: 'exact' })
+      .select(`*, ${embeds.join(', ')}`, { count: 'exact' })
       .order(sort, { ascending: dir })
       .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
 
-    if (ids) query = query.in('id', ids)
+    if (tagId) query = query.eq('tag_filter.tag_id', tagId)
+    if (segmentId) query = query.eq('seg_filter.segment_id', segmentId)
 
     if (q) {
       const digits = sanitizePhone(q)
@@ -56,7 +55,9 @@ export async function GET(request: Request) {
     if (error) badRequest(error.message)
 
     return {
-      contacts: (data ?? []).map((c: any) => ({
+      // The filter embeds did their job in the WHERE clause — they are not
+      // part of the contact the page renders.
+      contacts: (data ?? []).map(({ tag_filter, seg_filter, ...c }: any) => ({
         ...c,
         tags: (c.contact_tags ?? []).map((l: any) => l.tags).filter(Boolean),
       })),

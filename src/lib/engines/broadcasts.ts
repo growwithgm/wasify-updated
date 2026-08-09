@@ -3,6 +3,8 @@ import { phonesMatch, sanitizePhone } from '@/lib/phone'
 import { evaluateSegment } from './segments'
 import { logActivity, notify } from '@/lib/contacts'
 import { templateShape, paramMismatch, explainMetaError } from '@/lib/whatsapp/template-params'
+import { chunk } from '@/lib/contacts-import'
+import { allPages } from '@/lib/db-pages'
 
 /**
  * Broadcast sender.
@@ -22,37 +24,42 @@ export async function buildRecipients(db: any, userId: string, broadcast: any) {
   let contacts: any[] = []
 
   if (audience.mode === 'contacts' && audience.contact_ids?.length) {
-    const { data } = await db
-      .from('contacts')
-      .select('id, phone, name, opt_in_status')
-      .eq('user_id', userId)
-      .in('id', audience.contact_ids)
-    contacts = data ?? []
-  } else if (audience.mode === 'tags' && audience.tag_ids?.length) {
-    const { data: links } = await db
-      .from('contact_tags')
-      .select('contact_id')
-      .eq('user_id', userId)
-      .in('tag_id', audience.tag_ids)
-
-    const ids = [...new Set((links ?? []).map((l: any) => l.contact_id))]
-    if (ids.length) {
-      const { data } = await db
+    // Batched: hundreds of ids in one .in() overflow the request URL.
+    for (const part of chunk(audience.contact_ids as string[], 100)) {
+      const { data, error } = await db
         .from('contacts')
         .select('id, phone, name, opt_in_status')
         .eq('user_id', userId)
-        .in('id', ids)
-      contacts = data ?? []
+        .in('id', part)
+      if (error) throw new Error(`Audience query failed: ${error.message}`)
+      contacts.push(...(data ?? []))
     }
+  } else if (audience.mode === 'tags' && audience.tag_ids?.length) {
+    // Join, don't enumerate: collecting the tagged contact ids and passing
+    // them back via .in('id', [...]) built a ~30 KB URL for a tag on 800
+    // contacts, which the API rejected — and the wizard read that as an
+    // audience of zero.
+    contacts = await allPages((from, to) =>
+      db
+        .from('contacts')
+        .select('id, phone, name, opt_in_status, tag_filter:contact_tags!inner(tag_id)')
+        .eq('user_id', userId)
+        .in('tag_filter.tag_id', audience.tag_ids)
+        .order('id')
+        .range(from, to)
+    )
   } else if (audience.mode === 'segment' && audience.segment_id) {
     contacts = await evaluateSegment(db, userId, audience.segment_id)
   } else if (audience.mode === 'all') {
-    const { data } = await db
-      .from('contacts')
-      .select('id, phone, name, opt_in_status')
-      .eq('user_id', userId)
-      .eq('is_blocked', false)
-    contacts = data ?? []
+    contacts = await allPages((from, to) =>
+      db
+        .from('contacts')
+        .select('id, phone, name, opt_in_status')
+        .eq('user_id', userId)
+        .eq('is_blocked', false)
+        .order('id')
+        .range(from, to)
+    )
   }
 
   // Suppression list wins over everything.
@@ -260,7 +267,26 @@ export async function sendDueBroadcasts(db: any): Promise<{ started: number; sen
     .limit(10)
 
   for (const broadcast of due ?? []) {
-    const recipients = await buildRecipients(db, broadcast.user_id, broadcast)
+    // One broadcast whose audience cannot be resolved must fail LOUDLY and
+    // ALONE — marked failed with a notification, while the rest still go out.
+    let recipients: Awaited<ReturnType<typeof buildRecipients>>
+    try {
+      recipients = await buildRecipients(db, broadcast.user_id, broadcast)
+    } catch (e: any) {
+      console.error('[broadcasts] audience failed', broadcast.id, e)
+      await db
+        .from('broadcasts')
+        .update({ status: 'failed', completed_at: now })
+        .eq('id', broadcast.id)
+      await notify(
+        db,
+        broadcast.user_id,
+        'error',
+        `Broadcast "${broadcast.name}" failed: ${e?.message ?? 'could not resolve the audience'}`,
+        '/broadcasts'
+      )
+      continue
+    }
 
     if (recipients.length) {
       // Chunked so a large audience does not blow the statement size.

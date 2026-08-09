@@ -48,6 +48,7 @@ export async function POST(request: Request) {
       row_offset?: number
       total_rows?: number
       final?: boolean
+      replace_tags?: boolean
     }>(request)
 
     const rows = body.rows ?? []
@@ -227,6 +228,23 @@ export async function POST(request: Request) {
         links.push({ user_id: userId, contact_id: contactId, tag_id: tagId })
       }
     }
+    // "Replace existing tags": a contact this file re-tags sheds its old
+    // tags first, so moving a number from the "90 DAYS" list to a new list
+    // leaves exactly ONE tag, not a growing pile. Scoped tightly — only
+    // contacts that actually receive a tag from this import are touched; a
+    // row with no tag leaves its contact's tags alone.
+    if (body.replace_tags) {
+      const retagged = [...new Set(links.map((l) => l.contact_id))]
+      for (const part of chunk(retagged, 100)) {
+        const { error } = await supabase
+          .from('contact_tags')
+          .delete()
+          .eq('user_id', userId)
+          .in('contact_id', part)
+        if (error) badRequest(`Could not clear old tags: ${error.message}`)
+      }
+    }
+
     for (const batch of chunk(links, 1000)) {
       const { error } = await supabase
         .from('contact_tags')

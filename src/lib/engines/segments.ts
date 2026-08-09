@@ -1,5 +1,6 @@
 import type { SegmentCondition, SegmentDefinition, SegmentGroup } from '@/lib/types'
 import { normalize } from './types'
+import { allPages } from '@/lib/db-pages'
 
 /**
  * Segment evaluation.
@@ -55,10 +56,18 @@ type Snapshot = {
   lastInboundAt: string | null
 }
 
-/** Load every contact plus the joined data the rules can reference. */
+/**
+ * Load every contact plus the joined data the rules can reference.
+ *
+ * Every read here pages: PostgREST caps a response at 1,000 rows, so a
+ * plain select on a 1,700-contact tenant silently dropped 700 of them —
+ * segments looked computed and were quietly wrong.
+ */
 async function loadSnapshot(db: any, userId: string, needs: Set<string>): Promise<Snapshot[]> {
-  const { data: contacts } = await db.from('contacts').select('*').eq('user_id', userId)
-  if (!contacts?.length) return []
+  const contacts = await allPages((from, to) =>
+    db.from('contacts').select('*').eq('user_id', userId).order('id').range(from, to)
+  )
+  if (!contacts.length) return []
 
   const byId = new Map<string, Snapshot>(
     contacts.map((c: any) => [
@@ -74,12 +83,16 @@ async function loadSnapshot(db: any, userId: string, needs: Set<string>): Promis
   )
 
   if (needs.has('has_tag') || needs.has('not_has_tag')) {
-    const { data: links } = await db
-      .from('contact_tags')
-      .select('contact_id, tag_id, tags:tag_id (name)')
-      .eq('user_id', userId)
+    const links = await allPages((from, to) =>
+      db
+        .from('contact_tags')
+        .select('contact_id, tag_id, tags:tag_id (name)')
+        .eq('user_id', userId)
+        .order('id')
+        .range(from, to)
+    )
 
-    for (const link of links ?? []) {
+    for (const link of links) {
       const snap = byId.get(link.contact_id)
       if (!snap) continue
       snap.tagIds.add(link.tag_id)
@@ -89,13 +102,17 @@ async function loadSnapshot(db: any, userId: string, needs: Set<string>): Promis
   }
 
   if (needs.has('bought_product')) {
-    const { data: orders } = await db
-      .from('shopify_orders')
-      .select('contact_id, line_items')
-      .eq('user_id', userId)
-      .not('contact_id', 'is', null)
+    const orders = await allPages((from, to) =>
+      db
+        .from('shopify_orders')
+        .select('contact_id, line_items')
+        .eq('user_id', userId)
+        .not('contact_id', 'is', null)
+        .order('id')
+        .range(from, to)
+    )
 
-    for (const order of orders ?? []) {
+    for (const order of orders) {
       const snap = byId.get(order.contact_id)
       if (!snap) continue
       for (const item of order.line_items ?? []) {
@@ -106,12 +123,16 @@ async function loadSnapshot(db: any, userId: string, needs: Set<string>): Promis
   }
 
   if (needs.has('replied_within_hours')) {
-    const { data: conversations } = await db
-      .from('conversations')
-      .select('contact_id, last_inbound_at')
-      .eq('user_id', userId)
+    const conversations = await allPages((from, to) =>
+      db
+        .from('conversations')
+        .select('contact_id, last_inbound_at')
+        .eq('user_id', userId)
+        .order('id')
+        .range(from, to)
+    )
 
-    for (const conv of conversations ?? []) {
+    for (const conv of conversations) {
       const snap = byId.get(conv.contact_id)
       if (snap) snap.lastInboundAt = conv.last_inbound_at
     }
@@ -254,11 +275,15 @@ export async function evaluateSegment(db: any, userId: string, segmentId: string
   if (!segment) return []
 
   if (!segment.is_dynamic) {
-    const { data: members } = await db
-      .from('segment_members')
-      .select('contacts:contact_id (*)')
-      .eq('segment_id', segmentId)
-    return (members ?? []).map((m: any) => m.contacts).filter(Boolean)
+    const members = await allPages((from, to) =>
+      db
+        .from('segment_members')
+        .select('contacts:contact_id (*)')
+        .eq('segment_id', segmentId)
+        .order('id')
+        .range(from, to)
+    )
+    return members.map((m: any) => m.contacts).filter(Boolean)
   }
 
   return previewDefinition(db, userId, segment.definition)
@@ -294,12 +319,16 @@ export async function refreshSegment(db: any, userId: string, segmentId: string)
  * the same buckets the Contacts and Analytics screens display.
  */
 export async function recomputeRfm(db: any, userId: string): Promise<number> {
-  const { data: contacts } = await db
-    .from('contacts')
-    .select('id, lifetime_spent, orders_count, last_order_at')
-    .eq('user_id', userId)
+  const contacts = await allPages((from, to) =>
+    db
+      .from('contacts')
+      .select('id, lifetime_spent, orders_count, last_order_at')
+      .eq('user_id', userId)
+      .order('id')
+      .range(from, to)
+  )
 
-  const buyers = (contacts ?? []).filter((c: any) => (c.orders_count ?? 0) > 0)
+  const buyers = contacts.filter((c: any) => (c.orders_count ?? 0) > 0)
   if (!buyers.length) return 0
 
   const now = Date.now()
