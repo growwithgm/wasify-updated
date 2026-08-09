@@ -225,8 +225,21 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
   // rows, so the run trips a breaker instead.
   const SHAPE_CODES = new Set(['131008', '132000', '132001', '132012'])
   let shapeFailStreak = 0
+  let processed = 0
 
   for (const recipient of queued) {
+    // The merchant can hit Pause mid-batch; honour it within ten sends, not
+    // fifty. One cheap status read every tenth recipient.
+    if (processed > 0 && processed % 10 === 0) {
+      const { data: fresh } = await db
+        .from('broadcasts')
+        .select('status')
+        .eq('id', broadcast.id)
+        .maybeSingle()
+      if (fresh?.status !== 'sending') return processed
+    }
+    processed++
+
     // Consent is re-read here, not just when the audience was built. A large
     // broadcast drains over many cron passes, and someone who replies STOP
     // mid-run must not receive the rest of it.

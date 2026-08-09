@@ -1450,6 +1450,19 @@ describe('broadcast shape safety', () => {
     expect(templateBlockReason({ ...ok, buttons: [{ kind: 'url', dynamic: false }, { kind: 'quick_reply' }] })).toBeNull()
   })
 
+  it('lets the merchant pull the brake mid-campaign', () => {
+    // 809 queued, 50 more failures every cron tick, and no way to stop it —
+    // pause flips the status the drain loop selects on, and the batch loop
+    // re-reads that status every few sends so the halt lands in seconds.
+    const pause = readFileSync(join(process.cwd(), 'src/app/api/broadcasts/[id]/pause/route.ts'), 'utf8')
+    expect(pause).toContain("'paused'")
+    expect(pause).toContain("'scheduled'") // a scheduled campaign can be held back too
+    const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
+    expect(engine).toContain("fresh?.status !== 'sending'") // honoured mid-batch, not just between ticks
+    const page = readFileSync(join(process.cwd(), 'src/app/(app)/broadcasts/page.tsx'), 'utf8')
+    expect(page).toContain('Pause campaign') // the button lives in the delivery report too
+  })
+
   it('gates every send path on a fresh template shape and trips a breaker', () => {
     const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
     // Fresh pull from Meta before scheduled sends — edited-since-sync is the

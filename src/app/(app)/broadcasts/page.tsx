@@ -53,7 +53,8 @@ function BroadcastsScreen() {
   }, [load])
 
   async function send(b: Broadcast) {
-    if (!confirm(`Send "${b.name}" now?`)) return
+    const verb = b.status === 'paused' ? 'Resume' : 'Send'
+    if (!confirm(`${verb} "${b.name}" now?`)) return
     const res = await fetch(`/api/broadcasts/${b.id}/send`, { method: 'POST' })
     const json = await res.json()
     toast(res.ok ? `Sending to ${num(json.queued)} recipients…` : json.error, res.ok ? 'green' : 'red')
@@ -65,6 +66,16 @@ function BroadcastsScreen() {
     const res = await fetch(`/api/broadcasts/${b.id}`, { method: 'DELETE' })
     const json = await res.json()
     toast(res.ok ? 'Campaign deleted' : json.error, res.ok ? 'green' : 'red')
+    load()
+  }
+
+  async function pause(b: Broadcast) {
+    const res = await fetch(`/api/broadcasts/${b.id}/pause`, { method: 'POST' })
+    const json = await res.json()
+    toast(
+      res.ok ? 'Paused — queued recipients keep their place until you resume' : json.error,
+      res.ok ? 'green' : 'red'
+    )
     load()
   }
 
@@ -160,6 +171,16 @@ function BroadcastsScreen() {
                       {(b.status === 'draft' || b.status === 'scheduled') && (
                         <Button size="sm" variant="primary" onClick={() => send(b)}>
                           Send now
+                        </Button>
+                      )}
+                      {(b.status === 'sending' || b.status === 'scheduled') && (
+                        <Button size="sm" onClick={() => pause(b)}>
+                          Pause
+                        </Button>
+                      )}
+                      {b.status === 'paused' && (
+                        <Button size="sm" variant="primary" onClick={() => send(b)}>
+                          Resume
                         </Button>
                       )}
                       <Button size="sm" variant="ghost" onClick={() => remove(b)}>
@@ -653,20 +674,64 @@ const RECIPIENT_TONE: Record<string, any> = {
 }
 
 function BroadcastDetail({ id, onClose }: { id: string; onClose: () => void }) {
+  const toast = useToast()
   const [data, setData] = useState<any>(null)
   const [filter, setFilter] = useState('all')
+  const [acting, setActing] = useState(false)
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     fetch(`/api/broadcasts/${id}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then(setData)
   }, [id])
 
+  useEffect(() => {
+    reload()
+  }, [reload])
+
   const b = data?.broadcast
   const recipients = (data?.recipients ?? []).filter((r: any) => filter === 'all' || r.status === filter)
 
+  // Pause lives HERE too — the delivery report is where a merchant watching
+  // failures pile up wants to pull the brake, not back on the list.
+  async function act(path: 'pause' | 'send') {
+    setActing(true)
+    try {
+      const res = await fetch(`/api/broadcasts/${id}/${path}`, { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok) {
+        toast(json.error, 'red')
+      } else {
+        toast(path === 'pause' ? 'Paused — queued recipients keep their place' : 'Resumed', 'green')
+      }
+      reload()
+    } finally {
+      setActing(false)
+    }
+  }
+
   return (
-    <Modal open onClose={onClose} title={b ? `Delivery report — "${b.name}"` : 'Loading…'} width={800}>
+    <Modal
+      open
+      onClose={onClose}
+      title={b ? `Delivery report — "${b.name}"` : 'Loading…'}
+      width={800}
+      footer={
+        <>
+          {b && (b.status === 'sending' || b.status === 'scheduled') && (
+            <Button loading={acting} onClick={() => act('pause')}>
+              Pause campaign
+            </Button>
+          )}
+          {b && b.status === 'paused' && (
+            <Button variant="primary" loading={acting} onClick={() => act('send')}>
+              Resume sending
+            </Button>
+          )}
+          <Button onClick={onClose}>Close</Button>
+        </>
+      }
+    >
       {!data ? (
         <TableSkeleton rows={6} cols={3} />
       ) : (
