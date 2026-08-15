@@ -789,6 +789,11 @@ create table if not exists public.whatsapp_config (
   updated_at            timestamptz not null default now()
 );
 
+-- Meta App ID: the Resumable Upload API (sample images for template review)
+-- is app-scoped, not WABA-scoped — without this, image-header templates
+-- cannot be submitted from the builder.
+alter table public.whatsapp_config add column if not exists app_id text;
+
 create table if not exists public.whatsapp_webhook_events (
   id            uuid primary key default gen_random_uuid(),
   user_id       uuid references auth.users(id) on delete cascade,

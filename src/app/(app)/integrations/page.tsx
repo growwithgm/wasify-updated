@@ -500,6 +500,7 @@ function WhatsAppModal({
     phone_number_id: config?.phone_number_id ?? '',
     waba_id: config?.waba_id ?? '',
     business_id: config?.business_id ?? '',
+    app_id: config?.app_id ?? '',
     access_token: '',
     verify_token: '',
   })
@@ -576,6 +577,13 @@ function WhatsAppModal({
           onChange={(e) => setForm({ ...form, waba_id: e.target.value })}
           placeholder="987654321098765"
           hint="Needed for templates and webhooks"
+        />
+        <Input
+          label="Meta App ID"
+          value={form.app_id}
+          onChange={(e) => setForm({ ...form, app_id: e.target.value })}
+          placeholder="1234567890123456"
+          hint="developers.facebook.com → your app → App settings. Needed to upload sample images for image-header templates."
         />
       </div>
 

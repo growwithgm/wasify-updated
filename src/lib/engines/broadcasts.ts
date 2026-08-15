@@ -56,11 +56,15 @@ export async function broadcastShapeProblem(broadcast: any): Promise<string | nu
 
   const bindings = broadcast.variable_map?.body ?? []
   const coupon = String(broadcast.variable_map?.coupon_code ?? '').trim()
+  const headerImage = String(broadcast.variable_map?.header_image_url ?? '').trim()
   const shape = templateShape(tpl.components)
   return paramMismatch(shape, Array(bindings.length).fill('x'), {
     // One coupon fills every copy-code button; zero means the wizard never
     // collected one and the mismatch text says exactly that.
     couponCodes: coupon ? shape.copyCodeButtons.length : 0,
+    // An image header is satisfied by the campaign's image URL. Video and
+    // document headers stay unfillable — the mismatch text names them.
+    hasHeaderValue: shape.headerFormat === 'IMAGE' && !!headerImage,
   })
 }
 
@@ -206,6 +210,7 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
 
   const bindings: VariableBinding[] = broadcast.variable_map?.body ?? []
   const coupon = String(broadcast.variable_map?.coupon_code ?? '').trim()
+  const headerImage = String(broadcast.variable_map?.header_image_url ?? '').trim()
   const shape = templateShape(tpl.components)
 
   // A shape mismatch is the same for every recipient, so check it against the
@@ -213,6 +218,7 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
   // collecting an identical #132012 per person.
   const structural = paramMismatch(shape, Array(bindings.length).fill('x'), {
     couponCodes: coupon ? shape.copyCodeButtons.length : 0,
+    hasHeaderValue: shape.headerFormat === 'IMAGE' && !!headerImage,
   })
   if (structural) {
     await db
@@ -269,6 +275,7 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
     // skip that person rather than burning a send that cannot succeed.
     const perRecipient = paramMismatch(shape, vars, {
       couponCodes: coupon ? shape.copyCodeButtons.length : 0,
+      hasHeaderValue: shape.headerFormat === 'IMAGE' && !!headerImage,
     })
     if (perRecipient) {
       await db
@@ -284,6 +291,10 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
     }
 
     const components: any[] = []
+    // The image above the text — a per-send parameter, one URL for everyone.
+    if (shape.headerFormat === 'IMAGE' && headerImage) {
+      components.push({ type: 'header', parameters: [{ type: 'image', image: { link: headerImage } }] })
+    }
     if (vars.length) {
       components.push({ type: 'body', parameters: vars.map((t) => ({ type: 'text' as const, text: t })) })
     }

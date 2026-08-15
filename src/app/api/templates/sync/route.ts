@@ -134,6 +134,13 @@ function parseComponents(tpl: MetaTemplate) {
     sample_values: {
       body: body?.example?.body_text?.[0] ?? [],
       header: header?.example?.header_text ?? [],
+      // Media headers: Meta returns the approved sample as a lookaside URL in
+      // header_handle — it is what the previews render, and the default image
+      // a broadcast sends when the merchant does not supply their own.
+      header_url:
+        header && header.format && header.format !== 'TEXT'
+          ? ((header.example as any)?.header_handle?.[0] ?? null)
+          : null,
     },
   }
 }

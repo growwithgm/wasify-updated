@@ -10,6 +10,8 @@ export type WhatsAppConfig = {
   phone_number_id: string
   waba_id: string | null
   business_id: string | null
+  /** Meta App ID — the Resumable Upload API (template sample images) is app-scoped. */
+  app_id: string | null
   access_token: string | null
   verify_token: string | null
   display_phone_number: string | null

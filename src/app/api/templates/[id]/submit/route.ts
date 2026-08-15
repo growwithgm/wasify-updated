@@ -35,7 +35,13 @@ export async function POST(_request: Request, { params }: Params) {
         }
         components.push(header)
       } else {
-        components.push({ type: 'HEADER', format: tpl.header_type.toUpperCase() })
+        // Media headers are rejected without an example handle — the reason
+        // image templates could never be submitted from here before.
+        components.push({
+          type: 'HEADER',
+          format: tpl.header_type.toUpperCase(),
+          example: { header_handle: [tpl.sample_values?.header_handle] },
+        })
       }
     }
 
@@ -129,6 +135,13 @@ export function validateTemplate(tpl: any): string[] {
   const samples = tpl.sample_values?.body ?? []
   if (bodyVars > 0 && samples.filter((s: string) => s?.trim()).length < bodyVars) {
     issues.push(`Meta requires a sample value for each of the ${bodyVars} body variables`)
+  }
+
+  // Meta refuses a media header without an uploaded sample for review.
+  if (['image', 'video', 'document'].includes(tpl.header_type) && !tpl.sample_values?.header_handle) {
+    issues.push(
+      `A ${tpl.header_type} header needs a sample file — upload one in the builder before submitting`
+    )
   }
 
   // Meta rejects a body that starts or ends with a variable.

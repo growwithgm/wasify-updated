@@ -37,6 +37,7 @@ export async function PATCH(request: Request) {
     if (body.phone_number_id !== undefined) patch.phone_number_id = body.phone_number_id?.trim() || null
     if (body.waba_id !== undefined) patch.waba_id = body.waba_id?.trim() || null
     if (body.business_id !== undefined) patch.business_id = body.business_id?.trim() || null
+    if (body.app_id !== undefined) patch.app_id = body.app_id?.trim() || null
 
     // Only overwrite the token when a new one is actually supplied.
     if (body.access_token && !body.access_token.includes('•')) {

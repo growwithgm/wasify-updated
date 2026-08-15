@@ -236,7 +236,9 @@ const CONTACT_FIELDS = [
  */
 export function templateBlockReason(t: any): string | null {
   const headerType = (t.header_type ?? 'none').toLowerCase()
-  if (headerType !== 'none' && headerType !== 'text') {
+  // Image headers ARE supported — the wizard collects the image URL. Only
+  // video/document remain out of reach.
+  if (headerType !== 'none' && headerType !== 'text' && headerType !== 'image') {
     return `Has a ${headerType} header — broadcasts cannot attach the media for it yet.`
   }
   if ((t.header_text ?? '').includes('{{')) {
@@ -302,8 +304,16 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   // the synced template; the merchant can override per campaign.
   const copyCodeButton = ((template as any)?.buttons ?? []).find((b: any) => b?.kind === 'copy_code')
   const [couponCode, setCouponCode] = useState('')
+
+  // An image header is a per-send parameter too. Prefill with the template's
+  // own image (builder URL first, else the approved review sample).
+  const hasImageHeader = ((template as any)?.header_type ?? 'none') === 'image'
+  const [headerImage, setHeaderImage] = useState('')
   useEffect(() => {
     setCouponCode(copyCodeButton?.code ?? '')
+    setHeaderImage(
+      (template as any)?.header_media_url || (template as any)?.sample_values?.header_url || ''
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [template?.id])
 
@@ -345,7 +355,11 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
           template_name: template?.name,
           template_language: template?.language,
           audience,
-          variable_map: { body: bindings, coupon_code: couponCode.trim() || undefined },
+          variable_map: {
+            body: bindings,
+            coupon_code: couponCode.trim() || undefined,
+            header_image_url: hasImageHeader ? headerImage.trim() || undefined : undefined,
+          },
           scheduled_at: scheduledAt || null,
         }),
       })
@@ -366,7 +380,13 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   // Meta rejects the send outright with #132012, once per recipient.
   const unfilled = bindings.findIndex((b) => !String(b.value ?? '').trim())
   const couponMissing = !!copyCodeButton && !couponCode.trim()
-  const canNext = [!!template, !!estimate?.sendable, unfilled < 0 && !couponMissing, !!name.trim()][step]
+  const headerImageMissing = hasImageHeader && !headerImage.trim()
+  const canNext = [
+    !!template,
+    !!estimate?.sendable,
+    unfilled < 0 && !couponMissing && !headerImageMissing,
+    !!name.trim(),
+  ][step]
 
   return (
     <Modal
@@ -548,7 +568,7 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
       {step === 2 && (
         <>
           {varCount === 0 ? (
-            copyCodeButton ? null : (
+            copyCodeButton || hasImageHeader ? null : (
               <div className="text-[13px]" style={{ color: 'var(--w-muted)' }}>
                 This template has no variables — nothing to personalise.
               </div>
@@ -619,6 +639,27 @@ function BroadcastWizard({ onClose, onCreated }: { onClose: () => void; onCreate
               of Full name — &ldquo;Gary Elms&rdquo; becomes &ldquo;Gary&rdquo;.
             </div>
             </>
+          )}
+
+          {hasImageHeader && (
+            <div className="mt-3">
+              <Input
+                label="Header image URL"
+                value={headerImage}
+                onChange={(e) => setHeaderImage(e.target.value)}
+                placeholder="https://cdn.shopify.com/…/summer-sale.jpg"
+                hint="A public https image (JPEG/PNG). Prefilled from the template; every recipient receives this image above the text."
+              />
+              {headerImage.trim() && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={headerImage}
+                  alt="Header preview"
+                  className="mt-2 rounded-lg object-cover"
+                  style={{ maxHeight: 110, maxWidth: '100%' }}
+                />
+              )}
+            </div>
           )}
 
           {copyCodeButton && (

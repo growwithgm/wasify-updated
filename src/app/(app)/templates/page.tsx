@@ -258,6 +258,7 @@ const BLANK = {
   category: 'MARKETING',
   header_type: 'none',
   header_text: '',
+  header_media_url: '',
   body_text: '',
   footer_text: '',
   buttons: [] as TemplateButton[],
@@ -288,8 +289,37 @@ function TemplateBuilder({
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [sampleBusy, setSampleBusy] = useState(false)
+  const [samplePreview, setSamplePreview] = useState('')
 
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
+
+  /**
+   * Meta refuses an image-header template without an uploaded review sample
+   * (the `header_handle`). This uploads through our API to Meta's app-scoped
+   * Upload endpoint and stores the returned handle with the draft.
+   */
+  async function uploadSample(file: File) {
+    setError('')
+    setSampleBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/templates/upload-sample', { method: 'POST', body: fd })
+      const json = await res.json()
+      if (!res.ok) {
+        setError(json.error)
+        return
+      }
+      setSamplePreview(URL.createObjectURL(file))
+      setForm((f: any) => ({
+        ...f,
+        sample_values: { ...f.sample_values, header_handle: json.handle },
+      }))
+    } finally {
+      setSampleBusy(false)
+    }
+  }
 
   const bodyVars = useMemo(() => {
     const found = [...(form.body_text ?? '').matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]))
@@ -426,6 +456,66 @@ function TemplateBuilder({
             )}
           </div>
 
+          {form.header_type === 'image' && (
+            <div className="mt-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <label
+                  className="cursor-pointer rounded-lg border px-3 py-1.5 text-[12.5px] font-medium"
+                  style={{
+                    background: 'var(--w-card)',
+                    borderColor: 'var(--w-border)',
+                    opacity: readOnly || sampleBusy ? 0.6 : 1,
+                  }}
+                >
+                  {sampleBusy
+                    ? 'Uploading…'
+                    : form.sample_values?.header_handle
+                      ? 'Replace sample image'
+                      : 'Upload sample image'}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png"
+                    className="hidden"
+                    disabled={readOnly || sampleBusy}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) uploadSample(file)
+                      e.target.value = ''
+                    }}
+                  />
+                </label>
+                {form.sample_values?.header_handle && (
+                  <span className="text-[12px] font-medium" style={{ color: '#16A34A' }}>
+                    Sample uploaded ✓
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-[11.5px]" style={{ color: 'var(--w-muted)' }}>
+                Meta reviews this image together with the text. JPEG or PNG, max 5&nbsp;MB. Needs your
+                <b> Meta App ID</b> (Integrations → WhatsApp credentials).
+              </div>
+              <Input
+                label="Default image URL for sending (optional)"
+                value={form.header_media_url ?? ''}
+                disabled={readOnly}
+                className="mt-2"
+                onChange={(e) => set('header_media_url', e.target.value)}
+                placeholder="https://cdn.shopify.com/…/summer-sale.jpg"
+                hint="A public https image URL. Broadcasts prefill this as the header image; leave empty to use the approved sample."
+              />
+            </div>
+          )}
+
+          {(form.header_type === 'video' || form.header_type === 'document') && (
+            <div
+              className="mt-2.5 rounded-lg px-3 py-2 text-[12px] leading-relaxed"
+              style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+            >
+              Video and document headers cannot be submitted from here yet — create that template in
+              Meta Business Manager, then run <b>Sync from Meta</b>.
+            </div>
+          )}
+
           <Textarea
             label="Body"
             counter={`${(form.body_text ?? '').length}/1024`}
@@ -561,14 +651,24 @@ function TemplateBuilder({
               {form.header_type === 'text' && form.header_text && (
                 <div className="mb-1 text-[13px] font-bold">{form.header_text}</div>
               )}
-              {form.header_type !== 'none' && form.header_type !== 'text' && (
-                <div
-                  className="mb-1.5 flex h-20 items-center justify-center rounded-md text-[11px]"
-                  style={{ background: 'rgba(0,0,0,.06)', color: '#6B7280' }}
-                >
-                  {form.header_type} header
-                </div>
-              )}
+              {form.header_type !== 'none' &&
+                form.header_type !== 'text' &&
+                (samplePreview || form.header_media_url || form.sample_values?.header_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={samplePreview || form.header_media_url || form.sample_values?.header_url}
+                    alt="Header"
+                    className="mb-1.5 w-full rounded-md object-cover"
+                    style={{ maxHeight: 130 }}
+                  />
+                ) : (
+                  <div
+                    className="mb-1.5 flex h-20 items-center justify-center rounded-md text-[11px]"
+                    style={{ background: 'rgba(0,0,0,.06)', color: '#6B7280' }}
+                  >
+                    {form.header_type} header
+                  </div>
+                ))}
               <div className="whitespace-pre-wrap text-[13px] leading-snug">{preview || 'Your message…'}</div>
               {form.footer_text && (
                 <div className="mt-1 text-[11px]" style={{ opacity: 0.6 }}>

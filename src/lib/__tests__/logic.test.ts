@@ -1441,7 +1441,8 @@ describe('broadcast shape safety', () => {
   it('refuses templates a broadcast cannot fill, at the picker', () => {
     const ok = { header_type: 'none', header_text: null, body_text: 'Hi {{1}}', buttons: [] }
     expect(templateBlockReason(ok)).toBeNull()
-    expect(templateBlockReason({ ...ok, header_type: 'image' })).toContain('header')
+    expect(templateBlockReason({ ...ok, header_type: 'video' })).toContain('header')
+    expect(templateBlockReason({ ...ok, header_type: 'image' })).toBeNull() // wizard collects the URL
     expect(templateBlockReason({ ...ok, header_text: 'Deal {{1}}', header_type: 'text' })).toContain('header')
     expect(templateBlockReason({ ...ok, buttons: [{ kind: 'url', dynamic: true }] })).toContain('button')
     expect(templateBlockReason({ ...ok, body_text: 'Hi {{first_name}}' })).toContain('named')
@@ -1481,6 +1482,38 @@ describe('broadcast shape safety', () => {
     const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
     expect(engine).toContain("sub_type: 'copy_code'")
     expect(engine).toContain('coupon_code')
+  })
+
+  it('sends the image of an image-header template instead of refusing it', () => {
+    // "template mein jo image hoti hai wo jaati hi nahi" — the send never
+    // carried a header parameter, so Meta rejected every image template.
+    const image = templateShape([{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Hi {{1}}' }])
+    expect(paramMismatch(image, ['Ana'])).toMatch(/image header/i) // still refused when no URL is set
+    expect(paramMismatch(image, ['Ana'], { hasHeaderValue: true })).toBeNull()
+
+    const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
+    expect(engine).toContain('header_image_url')
+    expect(engine).toContain("image: { link: headerImage }")
+
+    // The sync keeps the approved sample's URL so previews can show it.
+    const sync = readFileSync(join(process.cwd(), 'src/app/api/templates/sync/route.ts'), 'utf8')
+    expect(sync).toContain('header_url')
+  })
+
+  it('refuses to submit a media-header template without its review sample', () => {
+    // Meta rejects a media header lacking example.header_handle — the builder
+    // used to send exactly that, so image templates could never be created.
+    const draft = { name: 'sale_hero', body_text: 'hello', header_type: 'image', sample_values: {} }
+    expect(validateTemplate(draft).some((i) => i.includes('sample file'))).toBe(true)
+    expect(validateTemplate({ ...draft, sample_values: { header_handle: '4:abc' } })).toEqual([])
+
+    const submit = readFileSync(join(process.cwd(), 'src/app/api/templates/[id]/submit/route.ts'), 'utf8')
+    expect(submit).toContain('header_handle')
+    // The upload leg is app-scoped and non-JSON — OAuth scheme + file_offset.
+    const upload = readFileSync(join(process.cwd(), 'src/app/api/templates/upload-sample/route.ts'), 'utf8')
+    expect(upload).toContain('app_id')
+    expect(upload).toContain("file_offset: '0'")
+    expect(upload).toContain('OAuth ')
   })
 
   it('gates every send path on a fresh template shape and trips a breaker', () => {
