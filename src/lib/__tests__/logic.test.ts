@@ -1498,6 +1498,13 @@ describe('broadcast shape safety', () => {
     // The sync keeps the approved sample's URL so previews can show it.
     const sync = readFileSync(join(process.cwd(), 'src/app/api/templates/sync/route.ts'), 'utf8')
     expect(sync).toContain('header_url')
+
+    // The inbox send path carries the image too — and auto-fills a copy-code
+    // coupon from the synced template, refusing readable-y when it cannot.
+    const chat = readFileSync(join(process.cwd(), 'src/app/api/conversations/[id]/messages/route.ts'), 'utf8')
+    expect(chat).toContain('header_image_url')
+    expect(chat).toContain('coupon_code')
+    expect(chat).toContain('paramMismatch')
   })
 
   it('refuses to submit a media-header template without its review sample', () => {

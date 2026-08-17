@@ -194,7 +194,10 @@ export async function resolveApprovedTemplate(userId: string, name: string, pref
   const db = createServiceClient()
   const { data } = await db
     .from('message_templates')
-    .select('name, language, status, components, category')
+    // buttons / header_media_url / sample_values ride along so callers can
+    // fill per-send parameters (coupon code, header image) from the synced
+    // template without a second query.
+    .select('name, language, status, components, category, buttons, header_media_url, sample_values')
     .eq('user_id', userId)
     .eq('name', name)
     .eq('status', 'APPROVED')

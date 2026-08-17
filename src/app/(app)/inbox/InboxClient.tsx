@@ -269,7 +269,7 @@ export function InboxClient({
     }
   }
 
-  async function sendTemplate(name: string, language: string, variables: string[]) {
+  async function sendTemplate(name: string, language: string, variables: string[], headerImage?: string) {
     if (!activeId) return
 
     // A ref, not state: two clicks in the same tick both read the old state
@@ -282,7 +282,13 @@ export function InboxClient({
       const res = await fetch(`/api/conversations/${activeId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: 'template', template_name: name, template_language: language, variables }),
+        body: JSON.stringify({
+          kind: 'template',
+          template_name: name,
+          template_language: language,
+          variables,
+          header_image_url: headerImage || undefined,
+        }),
       })
       const json = await res.json()
 
@@ -1207,10 +1213,11 @@ export function TemplatePickerModal({
   open: boolean
   onClose: () => void
   templates: MessageTemplate[]
-  onSend: (name: string, language: string, variables: string[]) => void
+  onSend: (name: string, language: string, variables: string[], headerImage?: string) => void
 }) {
   const [picked, setPicked] = useState<MessageTemplate | null>(null)
   const [vars, setVars] = useState<string[]>([])
+  const [headerImage, setHeaderImage] = useState('')
 
   const approved = templates.filter((t) => t.status === 'APPROVED')
 
@@ -1218,10 +1225,12 @@ export function TemplatePickerModal({
     if (!open) {
       setPicked(null)
       setVars([])
+      setHeaderImage('')
     }
   }, [open])
 
   const varCount = picked ? countVariables(picked.body_text ?? '') : 0
+  const hasImageHeader = ((picked as any)?.header_type ?? 'none') === 'image'
 
   return (
     <Modal
@@ -1235,8 +1244,10 @@ export function TemplatePickerModal({
             <Button onClick={() => setPicked(null)}>Back</Button>
             <Button
               variant="primary"
-              onClick={() => onSend(picked.name, picked.language, vars.slice(0, varCount))}
-              disabled={vars.slice(0, varCount).some((v) => !v?.trim())}
+              onClick={() => onSend(picked.name, picked.language, vars.slice(0, varCount), headerImage.trim())}
+              disabled={
+                vars.slice(0, varCount).some((v) => !v?.trim()) || (hasImageHeader && !headerImage.trim())
+              }
             >
               Send template
             </Button>
@@ -1257,6 +1268,7 @@ export function TemplatePickerModal({
             onClick={() => {
               setPicked(t)
               setVars(Array(countVariables(t.body_text ?? '')).fill(''))
+              setHeaderImage((t as any).header_media_url || (t as any).sample_values?.header_url || '')
             }}
             className="mb-1.5 block w-full cursor-pointer rounded-lg border p-3 text-left"
             style={{ background: 'var(--w-card2)', borderColor: 'var(--w-border)' }}
@@ -1274,11 +1286,33 @@ export function TemplatePickerModal({
       {picked && (
         <>
           <div
-            className="mb-3 rounded-lg p-3 text-[13px] leading-relaxed"
+            className="mb-3 overflow-hidden rounded-lg text-[13px] leading-relaxed"
             style={{ background: 'var(--w-bubble-out)', color: '#111827' }}
           >
-            {(picked.body_text ?? '').replace(/\{\{(\d+)\}\}/g, (_m, n) => vars[Number(n) - 1] || `{{${n}}}`)}
+            {hasImageHeader && headerImage.trim() && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={headerImage} alt="" className="w-full object-cover" style={{ maxHeight: 140 }} />
+            )}
+            <div className="p-3">
+              {(picked.body_text ?? '').replace(/\{\{(\d+)\}\}/g, (_m, n) => vars[Number(n) - 1] || `{{${n}}}`)}
+            </div>
           </div>
+
+          {hasImageHeader && (
+            <label className="mb-2 block">
+              <span className="mb-1 block text-[12px] font-medium">Header image URL</span>
+              <input
+                value={headerImage}
+                onChange={(e) => setHeaderImage(e.target.value)}
+                placeholder="https://cdn.shopify.com/…/photo.jpg"
+                className="w-full rounded-lg border px-3 py-2 text-[13px] outline-none"
+                style={{ background: 'var(--w-card)', borderColor: 'var(--w-border)' }}
+              />
+              <span className="mt-1 block text-[11px]" style={{ color: 'var(--w-muted)' }}>
+                This template has an image header — the customer receives this image above the text.
+              </span>
+            </label>
+          )}
           {Array.from({ length: varCount }).map((_, i) => (
             <label key={i} className="mb-2 block">
               <span className="mb-1 block text-[12px] font-medium">Variable {`{{${i + 1}}}`}</span>
