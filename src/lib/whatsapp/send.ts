@@ -1,4 +1,5 @@
 import { GRAPH_BASE, graphFetch, getWhatsAppConfig, type GraphResult } from './graph'
+import { templateShape } from './template-params'
 import { phoneVariants, sanitizePhone } from '@/lib/phone'
 import { createServiceClient } from '@/lib/supabase/server'
 
@@ -222,11 +223,41 @@ export async function sendTemplate(
 ): Promise<SendResult> {
   const tpl = await resolveApprovedTemplate(userId, templateName, preferredLang)
   if (!tpl) return { ok: false, error: `Template "${templateName}" is not synced or not Approved` }
+
+  // Per-send parameters the synced template can supply ITSELF: an image
+  // header's default image and a copy-code button's coupon. Flows,
+  // automations, COD and recovery all come through here with body/url
+  // components only — without this, the moment a merchant picked an image
+  // template for any of them, every send died at Meta with #132012.
+  const shape = templateShape(tpl.components)
+  const merged: TemplateComponent[] = [...(components ?? [])]
+
+  if (shape.headerFormat === 'IMAGE' && !merged.some((c) => c.type === 'header')) {
+    const link = (tpl as any).header_media_url || (tpl as any).sample_values?.header_url || ''
+    if (link) {
+      merged.unshift({ type: 'header', parameters: [{ type: 'image', image: { link } }] })
+    }
+  }
+
+  if (shape.copyCodeButtons.length && !merged.some((c) => c.sub_type === 'copy_code')) {
+    const code = ((tpl as any).buttons ?? []).find((b: any) => b?.kind === 'copy_code')?.code
+    if (code) {
+      for (const index of shape.copyCodeButtons) {
+        merged.push({
+          type: 'button',
+          sub_type: 'copy_code',
+          index: String(index),
+          parameters: [{ type: 'coupon_code', coupon_code: code }],
+        })
+      }
+    }
+  }
+
   return sendWhatsApp(userId, to, {
     kind: 'template',
     name: tpl.name,
     language: tpl.language,
-    components,
+    components: merged.length ? merged : undefined,
   })
 }
 

@@ -90,7 +90,7 @@ export function paramMismatch(
   }
 
   if (shape.headerFormat && shape.headerFormat !== 'TEXT' && !opts.hasHeaderValue) {
-    return `This template has a ${shape.headerFormat.toLowerCase()} header, which needs a media file to be supplied on every send. Use a text-only template.`
+    return `This template has a ${shape.headerFormat.toLowerCase()} header, which needs a media file on every send. Supply the header media URL, or pick a text-only template.`
   }
 
   const suffixes = opts.urlSuffixes ?? 0
@@ -131,6 +131,9 @@ export const META_ERROR_HINTS: Record<string, string> = {
   '132001': 'The template name or language does not match an approved template. Re-sync templates from Meta.',
   '132000': 'The number of variables sent does not match the template.',
   '131030': 'That number is not on the allowed list for a test number.',
+  '131053':
+    'Meta could not download the header media — the image URL must be public https ' +
+    '(your store CDN works well). Check the URL and resend.',
   '131047': 'More than 24 hours since the customer last wrote — only a template can be sent.',
   '131026': 'The number cannot receive WhatsApp messages.',
 }

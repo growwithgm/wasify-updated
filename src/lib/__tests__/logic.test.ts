@@ -1436,6 +1436,21 @@ describe('broadcast shape safety', () => {
 
   it('names #131008 in plain language', () => {
     expect(META_ERROR_HINTS['131008']).toContain('Sync from Meta')
+    expect(META_ERROR_HINTS['131053']).toContain('public https') // dead image URL
+  })
+
+  it('auto-fills the image header and coupon in the shared sendTemplate helper', () => {
+    // Flows, automations, COD and recovery all send through sendTemplate
+    // with body/url components only — an image template picked for ANY of
+    // them died at Meta until the helper learned to fill the header from
+    // the template's own default image (and the coupon from its synced code).
+    const send = readFileSync(join(process.cwd(), 'src/lib/whatsapp/send.ts'), 'utf8')
+    expect(send).toContain('templateShape')
+    expect(send).toContain('header_media_url')
+    expect(send).toContain('coupon_code')
+    // Callers that already supply a header/coupon are left untouched.
+    expect(send).toContain("!merged.some((c) => c.type === 'header')")
+    expect(send).toContain("!merged.some((c) => c.sub_type === 'copy_code')")
   })
 
   it('refuses templates a broadcast cannot fill, at the picker', () => {
