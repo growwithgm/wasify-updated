@@ -1,6 +1,11 @@
 import { withAuth, jsonBody, badRequest, notFound } from '@/lib/api'
-import { sendWhatsApp, resolveApprovedTemplate, type TemplateComponent } from '@/lib/whatsapp/send'
-import { templateShape, paramMismatch } from '@/lib/whatsapp/template-params'
+import {
+  sendWhatsApp,
+  resolveApprovedTemplate,
+  resolveHeaderImage,
+  type TemplateComponent,
+} from '@/lib/whatsapp/send'
+import { templateShape, paramMismatch, explainMetaError } from '@/lib/whatsapp/template-params'
 import { canSendFreeText } from '@/lib/window'
 import { bumpConversation } from '@/lib/contacts'
 
@@ -160,18 +165,18 @@ export async function POST(request: Request, { params }: Params) {
       // An image header is a PER-SEND parameter — this send never carried it,
       // so every image template died at Meta with #132012. The dialog's URL
       // wins; the template's default (builder URL, then the approved review
-      // sample) covers the common case.
-      const headerImage =
-        (body.header_image_url ?? '').trim() ||
-        ((tpl as any).header_media_url ?? '') ||
-        ((tpl as any).sample_values?.header_url ?? '')
+      // sample, re-uploaded to a media id when Meta-hosted) covers the rest.
+      const header =
+        shape.headerFormat === 'IMAGE'
+          ? await resolveHeaderImage(userId, tpl, body.header_image_url)
+          : null
 
       // A copy-code coupon is per-send too; the code synced from Meta fills it.
       const storedCoupon = ((tpl as any).buttons ?? []).find((b: any) => b?.kind === 'copy_code')?.code ?? ''
 
       const components: TemplateComponent[] = []
-      if (shape.headerFormat === 'IMAGE' && headerImage) {
-        components.push({ type: 'header', parameters: [{ type: 'image', image: { link: headerImage } }] })
+      if (header) {
+        components.push({ type: 'header', parameters: [header.param] })
       }
       const vars = (body.variables ?? []).filter((v) => v !== undefined)
       if (vars.length) {
@@ -203,12 +208,12 @@ export async function POST(request: Request, { params }: Params) {
       // #132012 bubble in the thread for a mismatch we can already see.
       const mismatch = paramMismatch(shape, vars.map(String), {
         urlSuffixes: body.button_url_suffix ? 1 : 0,
-        hasHeaderValue: shape.headerFormat === 'IMAGE' && !!headerImage,
+        hasHeaderValue: !!header,
         couponCodes: storedCoupon ? shape.copyCodeButtons.length : 0,
       })
       if (mismatch) {
         badRequest(
-          shape.headerFormat === 'IMAGE' && !headerImage
+          shape.headerFormat === 'IMAGE' && !header
             ? 'This template has an image header — paste an image URL in the send dialog, or set a default one on the template in the builder.'
             : mismatch
         )
@@ -227,6 +232,8 @@ export async function POST(request: Request, { params }: Params) {
           content: preview,
           template_name: tpl.name,
           template_language: tpl.language,
+          // The thread must show what the customer received — image included.
+          media_url: header?.displayUrl ?? null,
           status: 'sending',
         })
         .select('*')
@@ -242,11 +249,12 @@ export async function POST(request: Request, { params }: Params) {
       })
 
       if (!result.ok) {
+        const explained = explainMetaError(result.error, result.code)
         await supabase
           .from('messages')
-          .update({ status: 'failed', error_message: result.error, error_code: result.code ?? null })
+          .update({ status: 'failed', error_message: explained, error_code: result.code ?? null })
           .eq('id', pending.id)
-        badRequest(result.error, { code: 'send_failed', message_id: pending.id })
+        badRequest(explained, { code: 'send_failed', message_id: pending.id })
       }
 
       await supabase

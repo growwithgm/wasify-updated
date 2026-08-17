@@ -1508,7 +1508,7 @@ describe('broadcast shape safety', () => {
 
     const engine = readFileSync(join(process.cwd(), 'src/lib/engines/broadcasts.ts'), 'utf8')
     expect(engine).toContain('header_image_url')
-    expect(engine).toContain("image: { link: headerImage }")
+    expect(engine).toContain('resolveHeaderImage') // once per batch, media-id aware
 
     // The sync keeps the approved sample's URL so previews can show it.
     const sync = readFileSync(join(process.cwd(), 'src/app/api/templates/sync/route.ts'), 'utf8')
@@ -1520,6 +1520,26 @@ describe('broadcast shape safety', () => {
     expect(chat).toContain('header_image_url')
     expect(chat).toContain('coupon_code')
     expect(chat).toContain('paramMismatch')
+  })
+
+  it('re-uploads a Meta-hosted sample image and sends it by media id', () => {
+    // "Media upload error": Meta's send-time downloader refuses its OWN
+    // lookaside URL — exactly where the approved template's image lives. So
+    // that image is downloaded once, pushed to the WhatsApp media endpoint,
+    // and sent by id, cached on the template row until it nears expiry.
+    const send = readFileSync(join(process.cwd(), 'src/lib/whatsapp/send.ts'), 'utf8')
+    expect(send).toContain('lookaside')
+    expect(send).toMatch(/phone_number_id\}\/media/)
+    expect(send).toContain('header_media_id')
+
+    const schema = readFileSync(join(process.cwd(), 'supabase/schema.sql'), 'utf8')
+    expect(schema).toContain('header_media_id')
+
+    // And the thread shows the image the customer received, not just text.
+    const chat = readFileSync(join(process.cwd(), 'src/app/api/conversations/[id]/messages/route.ts'), 'utf8')
+    expect(chat).toContain('media_url: header?.displayUrl')
+    const inbox = readFileSync(join(process.cwd(), 'src/app/(app)/inbox/InboxClient.tsx'), 'utf8')
+    expect(inbox).toContain("m.content_type === 'template') && m.media_url")
   })
 
   it('refuses to submit a media-header template without its review sample', () => {

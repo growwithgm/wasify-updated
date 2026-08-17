@@ -1,4 +1,9 @@
-import { sendWhatsApp, resolveApprovedTemplate, refreshTemplateFromMeta } from '@/lib/whatsapp/send'
+import {
+  sendWhatsApp,
+  resolveApprovedTemplate,
+  refreshTemplateFromMeta,
+  resolveHeaderImage,
+} from '@/lib/whatsapp/send'
 import { phonesMatch, sanitizePhone } from '@/lib/phone'
 import { evaluateSegment } from './segments'
 import { logActivity, notify } from '@/lib/contacts'
@@ -238,6 +243,14 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
   // for every recipient — the template itself disagrees with what we send.
   // After a few in a row, marching on just paints hundreds of identical red
   // rows, so the run trips a breaker instead.
+  // Resolve the header image ONCE per batch — a Meta-hosted sample becomes a
+  // cached media id here (its lookaside URL is refused by Meta's own
+  // downloader: "Media upload error"), not a per-recipient link.
+  let headerParam: any = null
+  if (shape.headerFormat === 'IMAGE' && headerImage) {
+    headerParam = (await resolveHeaderImage(userId, tpl, headerImage))?.param ?? null
+  }
+
   const SHAPE_CODES = new Set(['131008', '132000', '132001', '132012'])
   let shapeFailStreak = 0
   let processed = 0
@@ -291,9 +304,9 @@ export async function sendBroadcastBatch(db: any, broadcast: any): Promise<numbe
     }
 
     const components: any[] = []
-    // The image above the text — a per-send parameter, one URL for everyone.
-    if (shape.headerFormat === 'IMAGE' && headerImage) {
-      components.push({ type: 'header', parameters: [{ type: 'image', image: { link: headerImage } }] })
+    // The image above the text — one resolved parameter, same for everyone.
+    if (headerParam) {
+      components.push({ type: 'header', parameters: [headerParam] })
     }
     if (vars.length) {
       components.push({ type: 'body', parameters: vars.map((t) => ({ type: 'text' as const, text: t })) })

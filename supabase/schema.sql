@@ -794,6 +794,14 @@ create table if not exists public.whatsapp_config (
 -- cannot be submitted from the builder.
 alter table public.whatsapp_config add column if not exists app_id text;
 
+-- Cached WhatsApp media id for a template's header image. Meta's own
+-- lookaside URL (the approved review sample) is REFUSED by its send-time
+-- downloader ("Media upload error"), so the image is re-uploaded once to
+-- the media endpoint and sent by id — valid ~30 days, refreshed when stale.
+alter table public.message_templates add column if not exists header_media_id text;
+alter table public.message_templates add column if not exists header_media_src text;
+alter table public.message_templates add column if not exists header_media_synced_at timestamptz;
+
 create table if not exists public.whatsapp_webhook_events (
   id            uuid primary key default gen_random_uuid(),
   user_id       uuid references auth.users(id) on delete cascade,

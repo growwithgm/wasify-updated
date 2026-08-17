@@ -9,7 +9,7 @@ export type TemplateComponent = {
   index?: string
   parameters?: Array<
     | { type: 'text'; text: string }
-    | { type: 'image'; image: { link: string } }
+    | { type: 'image'; image: { link?: string; id?: string } }
     | { type: 'currency'; currency: { fallback_value: string; code: string; amount_1000: number } }
     | { type: 'coupon_code'; coupon_code: string }
   >
@@ -195,10 +195,10 @@ export async function resolveApprovedTemplate(userId: string, name: string, pref
   const db = createServiceClient()
   const { data } = await db
     .from('message_templates')
-    // buttons / header_media_url / sample_values ride along so callers can
-    // fill per-send parameters (coupon code, header image) from the synced
-    // template without a second query.
-    .select('name, language, status, components, category, buttons, header_media_url, sample_values')
+    // buttons / header_media_url / sample_values / header_media_* ride along
+    // so callers can fill per-send parameters (coupon code, header image)
+    // from the synced template without a second query.
+    .select('name, language, status, components, category, buttons, header_media_url, sample_values, header_media_id, header_media_src, header_media_synced_at')
     .eq('user_id', userId)
     .eq('name', name)
     .eq('status', 'APPROVED')
@@ -211,6 +211,96 @@ export async function resolveApprovedTemplate(userId: string, name: string, pref
     if (loose) return loose
   }
   return data[0]
+}
+
+/** Meta-hosted URLs — the approved sample — that Meta's own send-time downloader refuses. */
+function isMetaHosted(url: string): boolean {
+  return /lookaside|fbsbx|fbcdn|whatsapp\.net|scontent/i.test(url)
+}
+
+/** Meta keeps uploaded media ~30 days; refresh comfortably before that. */
+const HEADER_MEDIA_TTL_DAYS = 25
+
+/**
+ * The header-image parameter for an image-header template, plus the URL the
+ * inbox thread should display.
+ *
+ * A merchant-hosted public URL goes out as a plain link. But the common case
+ * — "send the image the approved template already has" — is a Meta lookaside
+ * URL, and Meta's send-time downloader REFUSES its own lookaside domain
+ * ("Media upload error"). So that image is downloaded once, re-uploaded to
+ * the WhatsApp media endpoint, and sent by media id — cached on the template
+ * row and refreshed when it nears Meta's ~30-day media expiry.
+ */
+export async function resolveHeaderImage(
+  userId: string,
+  tpl: any,
+  overrideUrl?: string
+): Promise<{ param: { type: 'image'; image: { link?: string; id?: string } }; displayUrl: string } | null> {
+  const src: string =
+    (overrideUrl ?? '').trim() || tpl.header_media_url || tpl.sample_values?.header_url || ''
+  if (!src) return null
+
+  if (!isMetaHosted(src)) {
+    return { param: { type: 'image', image: { link: src } }, displayUrl: src }
+  }
+
+  const freshAfter = Date.now() - HEADER_MEDIA_TTL_DAYS * 86_400_000
+  if (
+    tpl.header_media_id &&
+    tpl.header_media_src === src &&
+    tpl.header_media_synced_at &&
+    new Date(tpl.header_media_synced_at).getTime() > freshAfter
+  ) {
+    return { param: { type: 'image', image: { id: tpl.header_media_id } }, displayUrl: src }
+  }
+
+  try {
+    const config = await getWhatsAppConfig(userId)
+    if (!config?.phone_number_id) {
+      return { param: { type: 'image', image: { link: src } }, displayUrl: src }
+    }
+
+    const download = await fetch(src)
+    if (!download.ok) throw new Error(`sample download failed: HTTP ${download.status}`)
+    const mime = download.headers.get('content-type')?.split(';')[0] || 'image/jpeg'
+    const bytes = new Uint8Array(await download.arrayBuffer())
+    if (bytes.byteLength > 5 * 1024 * 1024) throw new Error('sample image exceeds 5 MB')
+
+    const form = new FormData()
+    form.append('messaging_product', 'whatsapp')
+    form.append('type', mime)
+    form.append('file', new Blob([bytes], { type: mime }), 'header')
+
+    const upload = await fetch(`${GRAPH_BASE}/${config.phone_number_id}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.token}` },
+      body: form,
+    })
+    const json: any = await upload.json().catch(() => null)
+    if (!upload.ok || !json?.id) {
+      throw new Error(json?.error?.message ?? `media upload failed: HTTP ${upload.status}`)
+    }
+
+    const db = createServiceClient()
+    await db
+      .from('message_templates')
+      .update({
+        header_media_id: json.id,
+        header_media_src: src,
+        header_media_synced_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .eq('name', tpl.name)
+      .eq('language', tpl.language)
+
+    return { param: { type: 'image', image: { id: json.id } }, displayUrl: src }
+  } catch (e) {
+    console.error('[templates] header media re-upload failed', e)
+    // No worse than before this existed: the link may still be refused, but a
+    // transient upload failure must not hard-block the whole send path.
+    return { param: { type: 'image', image: { link: src } }, displayUrl: src }
+  }
 }
 
 /** Convenience: send an approved template, resolving the exact language first. */
@@ -233,9 +323,9 @@ export async function sendTemplate(
   const merged: TemplateComponent[] = [...(components ?? [])]
 
   if (shape.headerFormat === 'IMAGE' && !merged.some((c) => c.type === 'header')) {
-    const link = (tpl as any).header_media_url || (tpl as any).sample_values?.header_url || ''
-    if (link) {
-      merged.unshift({ type: 'header', parameters: [{ type: 'image', image: { link } }] })
+    const header = await resolveHeaderImage(userId, tpl)
+    if (header) {
+      merged.unshift({ type: 'header', parameters: [header.param] })
     }
   }
 

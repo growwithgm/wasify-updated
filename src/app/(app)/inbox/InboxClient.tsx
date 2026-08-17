@@ -877,7 +877,9 @@ function MessageBubble({ message: m, showDivider }: { message: Msg; showDivider:
               boxShadow: '0 1px 1px rgba(0,0,0,.08)',
             }}
           >
-            {m.content_type === 'image' && m.media_url && (
+            {(m.content_type === 'image' || m.content_type === 'template') && m.media_url && (
+              // Templates with an image header carry their image here — the
+              // thread must show what the customer actually received.
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={m.media_url}
