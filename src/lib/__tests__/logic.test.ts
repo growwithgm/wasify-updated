@@ -1422,6 +1422,23 @@ describe('bulk CSV import', () => {
   })
 })
 
+describe('messaging data wipe', () => {
+  it('wipes narrowly, keeps consent, and demands the typed word server-side', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/api/settings/reset/route.ts'), 'utf8')
+    // The typed confirmation is enforced HERE, not just in the modal.
+    expect(route).toContain("'DELETE'")
+    // RLS client only — even a bug in this route cannot reach another tenant.
+    expect(route).not.toContain('createServiceClient')
+    // Consent survives a number change, and Shopify data belongs to the
+    // store, not the number — neither may ever enter the wipe list.
+    expect(route).not.toContain('suppression_list')
+    expect(route).not.toContain('shopify_orders')
+    expect(route).toContain("'messages'")
+    expect(route).toContain("'contacts'")
+    expect(route).toContain("'message_templates'")
+  })
+})
+
 describe('broadcast shape safety', () => {
   it('detects named {{variables}} that positional sends cannot fill', () => {
     // Meta's builder can mint {{first_name}}-style templates. countVariables

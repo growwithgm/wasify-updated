@@ -16,7 +16,7 @@ const TIMEZONES = [
   'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'UTC',
 ]
 
-const SECTIONS = ['Business profile', 'Business hours', 'Team', 'Canned replies', 'Suppression list'] as const
+const SECTIONS = ['Business profile', 'Business hours', 'Team', 'Canned replies', 'Suppression list', 'Danger zone'] as const
 
 export default function SettingsPage() {
   return (
@@ -31,6 +31,7 @@ function SettingsScreen() {
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState('')
   const [section, setSection] = useState<(typeof SECTIONS)[number]>('Business profile')
+  const [wipeOpen, setWipeOpen] = useState(false)
   const [form, setForm] = useState<any>({})
   const [saving, setSaving] = useState(false)
   const [agentModal, setAgentModal] = useState(false)
@@ -429,7 +430,41 @@ function SettingsScreen() {
               )}
             </Card>
           )}
+
+          {section === 'Danger zone' && (
+            <Card>
+              <CardTitle
+                title="Danger zone"
+                sub="For starting over — e.g. connecting a new WhatsApp number"
+              />
+              <div className="mb-3 text-[13px] leading-relaxed">
+                <b>Delete all messaging data.</b> Removes every contact, the whole inbox
+                (conversations and messages), all tags, synced templates, broadcasts with their
+                delivery reports, CSV import history, COD confirmations and cart-recovery tracking.
+              </div>
+              <div className="mb-4 rounded-lg px-3 py-2 text-[12.5px] leading-relaxed" style={{ background: 'var(--w-card2)' }}>
+                <b>Kept:</b> Shopify data (orders, products, checkouts), flows, automations, AI
+                chatbot rules, segment and custom-field definitions, your credentials and settings —
+                and the <b>suppression list</b>: people who said STOP stay suppressed, consent does
+                not reset with a new number.
+              </div>
+              <Button variant="danger" onClick={() => setWipeOpen(true)}>
+                Delete all messaging data…
+              </Button>
+            </Card>
+          )}
         </>
+      )}
+
+      {wipeOpen && (
+        <WipeModal
+          onClose={() => setWipeOpen(false)}
+          onDone={(summary) => {
+            setWipeOpen(false)
+            load()
+            toast(summary)
+          }}
+        />
       )}
 
       {agentModal && (
@@ -455,6 +490,102 @@ function SettingsScreen() {
         />
       )}
     </Page>
+  )
+}
+
+/**
+ * The double-check the wipe demands: an explicit acknowledgement AND typing
+ * DELETE. The server refuses without the typed word too, so a stray click
+ * can never take the data with it.
+ */
+function WipeModal({ onClose, onDone }: { onClose: () => void; onDone: (summary: string) => void }) {
+  const [ack, setAck] = useState(false)
+  const [confirmWord, setConfirmWord] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const armed = ack && confirmWord.trim().toUpperCase() === 'DELETE'
+
+  async function run() {
+    setError('')
+    setBusy(true)
+    try {
+      const res = await fetch('/api/settings/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: confirmWord }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        setError(json.error ?? 'Delete failed')
+        return
+      }
+      const total = Object.values(json.removed as Record<string, number>).reduce((a, b) => a + b, 0)
+      onDone(`Done — ${total.toLocaleString()} records removed. Fresh start.`)
+    } catch {
+      setError('Network error — nothing may have been removed. Try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={busy ? () => {} : onClose}
+      title="Delete all messaging data"
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" loading={busy} disabled={!armed} onClick={run}>
+            Delete everything
+          </Button>
+        </>
+      }
+    >
+      <div
+        className="mb-3 rounded-lg px-3 py-2 text-[12.5px] leading-relaxed"
+        style={{ background: 'var(--w-errortint)', color: '#B91C1C' }}
+      >
+        <b>This cannot be undone.</b> Contacts, the whole inbox, tags, templates, broadcasts and
+        their reports, import history, COD confirmations and recovery tracking — all gone.
+      </div>
+      <div className="mb-3 text-[12.5px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
+        Shopify data, flows, automations, chatbot rules, segment definitions, your settings and the
+        suppression list are kept.
+      </div>
+
+      <label className="mb-3 flex items-start gap-3">
+        <input
+          type="checkbox"
+          checked={ack}
+          onChange={(e) => setAck(e.target.checked)}
+          className="mt-0.5 h-4 w-4 cursor-pointer"
+          style={{ accentColor: '#DC2626' }}
+        />
+        <span className="text-[12.5px] leading-relaxed">
+          I understand this permanently deletes all messaging data and cannot be undone.
+        </span>
+      </label>
+
+      <Input
+        label='Type "DELETE" to confirm'
+        value={confirmWord}
+        onChange={(e) => setConfirmWord(e.target.value)}
+        placeholder="DELETE"
+      />
+
+      {error && (
+        <div
+          className="mt-3 rounded-lg px-3 py-2 text-[12.5px]"
+          style={{ background: 'var(--w-errortint)', color: '#B91C1C' }}
+        >
+          {error}
+        </div>
+      )}
+    </Modal>
   )
 }
 
