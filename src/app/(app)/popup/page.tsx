@@ -417,7 +417,7 @@ function PopupScreen() {
           <Card className="mb-4">
             <CardTitle
               title="Frequency, teaser & devices"
-              sub="After subscribing, the popup never shows again on that browser."
+              sub="Logged-in customers never see the popup — it's a new-customer offer. After subscribing, it never shows again on that browser."
             />
             <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
               <Input

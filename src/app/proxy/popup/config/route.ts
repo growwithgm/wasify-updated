@@ -13,10 +13,10 @@ export const dynamic = 'force-dynamic'
  *
  * Targeting is decided HERE, all of it: page rules (with the locale-prefix
  * strip for multi-market stores), device (from this request's user-agent),
- * and — when Shopify tells us who is logged in — whether this customer
- * already opted in, in which case there is nothing to ask. The client's
- * only pre-condition is the Customer Privacy check, which by nature lives
- * in the browser.
+ * and the logged-out-only rule — the popup is a new-customer offer, so a
+ * request carrying logged_in_customer_id gets show:false, always. The
+ * client's only pre-condition is the Customer Privacy check, which by
+ * nature lives in the browser.
  *
  * A popup that cannot run answers a bare {enabled:false} — the WHY is
  * admin-only (popupBlockReason), never leaked to the storefront.
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
   const { data: config } = await db
     .from('shopify_config')
     .select(
-      'user_id, popup_enabled, popup_include_paths, popup_exclude_paths, popup_strip_locale, popup_heading, popup_subheading, popup_button_text, popup_success_text, popup_consent_text, popup_disclaimer, popup_trigger_exit, popup_trigger_delay, popup_trigger_delay_seconds, popup_trigger_scroll, popup_trigger_scroll_pct, popup_trigger_all, popup_dismiss_days, popup_teaser_enabled, popup_teaser_text, popup_teaser_position, popup_devices, popup_discount_id, popup_template'
+      'user_id, popup_enabled, popup_include_paths, popup_exclude_paths, popup_strip_locale, popup_heading, popup_subheading, popup_button_text, popup_success_text, popup_success_note, popup_success_button, popup_consent_text, popup_disclaimer, popup_trigger_exit, popup_trigger_delay, popup_trigger_delay_seconds, popup_trigger_scroll, popup_trigger_scroll_pct, popup_trigger_all, popup_dismiss_days, popup_teaser_enabled, popup_teaser_text, popup_teaser_position, popup_devices, popup_discount_id, popup_template'
     )
     .eq('store_domain', shop)
     .maybeSingle()
@@ -60,19 +60,12 @@ export async function GET(request: Request) {
   }
 
   // App Proxy appends logged_in_customer_id (signed) when the visitor has a
-  // Shopify account session. If we KNOW this customer and they are already
-  // opted in, there is nothing to ask. No id → no lookup, no guessing.
+  // Shopify account session. The popup is a NEW-customer offer: any login
+  // means no popup, full stop — no contact lookup, no guessing. The theme
+  // extension gates this in Liquid too; this is the second lock.
   const customerId = (url.searchParams.get('logged_in_customer_id') ?? '').trim()
   if (customerId) {
-    const { data: contact } = await db
-      .from('contacts')
-      .select('opt_in_status')
-      .eq('user_id', config.user_id)
-      .eq('shopify_customer_id', customerId)
-      .maybeSingle()
-    if (contact?.opt_in_status === 'opted_in') {
-      return NextResponse.json({ enabled: true, show: false })
-    }
+    return NextResponse.json({ enabled: true, show: false })
   }
 
   let discount: any = null

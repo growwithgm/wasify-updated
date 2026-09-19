@@ -1559,15 +1559,18 @@ describe('popup consent capture', () => {
     expect(schema).toContain(`'["/", "/products/*"]'`)
   })
 
-  it('skips the popup for a logged-in customer who already opted in — and never guesses', () => {
+  it('refuses every logged-in customer server-side — the offer is for new customers', () => {
     const cfg = readFileSync(join(process.cwd(), 'src/app/proxy/popup/config/route.ts'), 'utf8')
+    // Any signed-in session gets show:false, full stop. No contact lookup,
+    // no opt-in check, no guessing — a login is enough.
     expect(cfg).toContain('logged_in_customer_id')
-    // The contacts lookup lives INSIDE the if(customerId) guard: no id, no
-    // lookup, no guessing.
     expect(cfg).toContain('if (customerId)')
-    expect(cfg.indexOf('if (customerId)')).toBeLessThan(cfg.indexOf("shopify_customer_id"))
+    expect(cfg).not.toContain('shopify_customer_id')
     expect(cfg).toContain('deviceAllowed') // device decided server-side too
     expect(cfg).toContain("get('mode')") // teaser page loads don't count as impressions
+    // The select feeds popupPublicConfig — every content column must travel.
+    expect(cfg).toContain('popup_success_note')
+    expect(cfg).toContain('popup_success_button')
   })
 
   it('gives the admin full live control with no hardcoded or truncated content', () => {
@@ -1604,17 +1607,16 @@ describe('popup consent capture', () => {
     expect(js).toContain('(pointer: fine)') // exit-intent falls back to delay on touch
   })
 
-  it('is DTC-only, dials the country prefix, and ends on the dark code screen', () => {
-    // B2B gate: Liquid computes it — only Liquid knows who is logged in —
-    // covering Shopify B2B proper and the usual wholesale tags…
+  it('shows to logged-out visitors only, dials the country prefix, and ends on the dark code screen', () => {
+    // New-customer offer: Liquid flags ANY signed-in customer account —
+    // only Liquid knows who is logged in — which covers B2B/wholesale too…
     const liquid = readFileSync(join(process.cwd(), 'extensions/wasify-popup/blocks/popup.liquid'), 'utf8')
-    expect(liquid).toContain('customer.b2b?')
-    expect(liquid).toContain("contains 'wholesale'")
-    expect(liquid).toContain('data-b2b')
-    // …and for a B2B customer the JS does NOTHING, not even a config call.
+    expect(liquid).toContain('if customer')
+    expect(liquid).toContain('data-customer')
+    // …and for a logged-in customer the JS does NOTHING, not even a config call.
     const js = readFileSync(join(process.cwd(), 'extensions/wasify-popup/assets/wasify-popup.js'), 'utf8')
-    expect(js).toContain("getAttribute('data-b2b')")
-    expect(js.indexOf("getAttribute('data-b2b')")).toBeLessThan(js.indexOf('fetchConfig'))
+    expect(js).toContain("getAttribute('data-customer')")
+    expect(js.indexOf("getAttribute('data-customer')")).toBeLessThan(js.indexOf('fetchConfig'))
     // The dial prefix follows the storefront country; a number typed as
     // full international (+… / 00…) is respected as-is.
     expect(js).toContain('data-country')

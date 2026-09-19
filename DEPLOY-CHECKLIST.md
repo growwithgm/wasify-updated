@@ -123,9 +123,10 @@ mein wahi likhein.)
 8. **Gate KHOLTA hai:** step-5 wale opted-in number se checkout
    chhorein → 45 min baad reminder 1 aaye (button mein cart link +
    `?discount=CODE`).
-9. **Logged-in skip:** jis number/account se subscribe kiya usi Shopify
-   customer account se login ho kar (naye browser mein) store kholen →
-   popup NA aaye.
+9. **Logged-in skip:** KISI bhi Shopify customer account se login ho kar
+   (naye browser mein) store kholen → popup NA aaye. Yeh new-customer
+   offer hai — har login (B2B samet) ke liye popup band hai; logout
+   karte hi wapis aa jata hai.
 10. **STOP re-consent:** test number se STOP bhejein, phir popup
     bharein → code AAYE, lekin Settings → Suppression list mein
     "Re-consented" badge ke sath raha aur recovery NA jaye — jab tak

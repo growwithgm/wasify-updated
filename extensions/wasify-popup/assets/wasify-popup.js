@@ -2,9 +2,11 @@
  * Wasify WhatsApp popup — storefront runtime.
  *
  * Order of operations, and why:
- *   1. B2B gate: the popup is for DTC shoppers. The liquid block sets
- *      data-b2b for logged-in B2B/company/wholesale customers — for them
- *      this script does NOTHING, not even a config call.
+ *   1. Logged-in gate: the popup is a NEW-customer offer. The liquid
+ *      block sets data-customer for anyone signed into a customer account
+ *      (which covers B2B/wholesale logins too) — for them this script
+ *      does NOTHING, not even a config call. The server refuses
+ *      logged-in requests as well, as the second lock.
  *   2. localStorage gates: subscribed = nothing, ever. Dismissed = the
  *      POPUP stays hidden until the stamped date, but the TEASER tab may
  *      still render so the visitor can reopen it themselves.
@@ -26,7 +28,7 @@
 
   var root = document.getElementById('wasify-popup-root');
   if (!root) return;
-  if (root.getAttribute('data-b2b') === '1') return; // DTC only
+  if (root.getAttribute('data-customer') === '1') return; // new-customer offer: logged-out only
 
   var PROXY = (root.getAttribute('data-proxy') || '/apps/wasify').replace(/\/+$/, '');
   var COUNTRY = (root.getAttribute('data-country') || 'ES').toUpperCase();
