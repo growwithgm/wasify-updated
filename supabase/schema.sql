@@ -1573,6 +1573,29 @@ alter table public.consent_events add column if not exists ip text;
 -- the row BY HAND when they choose to.
 alter table public.suppression_list add column if not exists re_opted_in_at timestamptz;
 
+-- Retry queue for the popup -> Shopify customer push. The push runs inline
+-- at subscribe time; a failure (missing scope, pending Protected Customer
+-- Data approval, network) lands here and the 15-minute tick retries it.
+-- Wasify's own contact is the source of truth either way — this is a copy.
+create table if not exists public.shopify_push_queue (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  shop        text not null,
+  phone       text not null,
+  name        text,
+  email       text,
+  tags        jsonb not null default '[]'::jsonb,
+  status      text not null default 'pending',   -- pending | done | failed
+  attempts    integer not null default 0,
+  last_error  text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create index if not exists shopify_push_queue_idx on public.shopify_push_queue(status, created_at);
+
+alter table public.shopify_push_queue enable row level security;
+
 -- audit_log is service-role only: RLS on, and no policy at all means
 -- authenticated clients can never read or write it.
 alter table public.audit_log enable row level security;

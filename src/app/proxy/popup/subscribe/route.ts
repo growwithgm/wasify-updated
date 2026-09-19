@@ -6,6 +6,8 @@ import { toMetaPhone } from '@/lib/flow/order-confirmation'
 import { makeRateLimiter, requestIp } from '@/lib/rate-limit'
 import { findOrCreateContact, findOrCreateConversation, logActivity } from '@/lib/contacts'
 import { generateDiscountCodeForContact } from '@/lib/engines/discounts'
+import { upsertShopifyCustomer } from '@/lib/shopify/customers'
+import { queueShopifyPush } from '@/lib/shopify/push-queue'
 import { sendTemplate, resolveApprovedTemplate } from '@/lib/whatsapp/send'
 import { templateShape, explainMetaError } from '@/lib/whatsapp/template-params'
 
@@ -145,6 +147,31 @@ export async function POST(request: Request) {
   // Submit counted the moment consent is saved — send failures below don't
   // un-count a real signup.
   await db.from('popup_events').insert({ user_id: userId, event: 'submit', path: body.path ?? null })
+
+  /* 3.5 — mirror into Shopify NOW (tag: wasify-popup), queue on failure */
+  // Tags only — Wasify holds WHATSAPP consent, so Shopify's email/SMS
+  // marketing consent fields are never touched (upsertShopifyCustomer
+  // enforces that). A failure never blocks the signup: it goes to the retry
+  // queue and the 15-minute tick keeps trying.
+  try {
+    const push = await upsertShopifyCustomer(shop, {
+      phone,
+      name: (body.name ?? '').trim() || null,
+      tags: ['wasify-popup'],
+    })
+    if (!push.ok) {
+      await queueShopifyPush(db, {
+        userId,
+        shop,
+        phone,
+        name: (body.name ?? '').trim() || null,
+        tags: ['wasify-popup'],
+      })
+    }
+  } catch (e) {
+    console.error('[popup] shopify push failed', e)
+    await queueShopifyPush(db, { userId, shop, phone, name: (body.name ?? '').trim() || null, tags: ['wasify-popup'] })
+  }
 
   /* 4 — discount (optional) */
   let code: string | null = null

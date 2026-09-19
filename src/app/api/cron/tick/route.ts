@@ -6,6 +6,7 @@ import { runRecoveryTimers } from '@/lib/engines/recovery'
 import { runDueAutomations } from '@/lib/engines/automations'
 import { resumeDueFlowRuns } from '@/lib/engines/flows'
 import { sendDueBroadcasts } from '@/lib/engines/broadcasts'
+import { retryShopifyPushQueue } from '@/lib/shopify/push-queue'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,6 +41,7 @@ export async function GET(request: Request) {
     ['flows', () => resumeDueFlowRuns(db)],
     ['broadcasts', () => sendDueBroadcasts(db)],
     ['snooze', () => wakeSnoozedConversations(db)],
+    ['shopify-push', () => retryShopifyPushQueue(db)],
   ]
 
   for (const [name, run] of steps) {

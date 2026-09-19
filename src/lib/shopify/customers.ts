@@ -2,35 +2,34 @@ import { adminGraphql, configByStoreDomain } from './admin'
 import { bisTags } from '@/lib/flow/stock-alerts'
 
 /**
- * Mirror a back-in-stock signup into Shopify as a customer + tags, so Flow's
- * "Customer tags added" trigger can run store-side automation on it.
+ * Mirror a signup into Shopify as a customer + tags, so Shopify Flow can run
+ * store-side automation on it ("Customer tags added").
  *
  * This exists because the theme cannot do it: the native customer form
  * submits `contact[phone]` but Shopify never maps it onto the record — a
  * known platform issue — and this whole system runs on phone. Admin API only.
  *
  * Two hard rules, both GDPR-shaped:
- *   · NEVER touch emailMarketingConsent or smsMarketingConsent. The customer
- *     consented to ONE WhatsApp notification, not to marketing lists — and
- *     Klaviyo syncs Shopify customers, so a wrongly-set consent leaks straight
- *     into email campaigns.
- *   · This is best-effort. It runs AFTER the subscription is saved and a
- *     failure here (missing write_customers scope, pending Protected Customer
- *     Data approval, network) must never fail the signup.
+ *   · NEVER touch emailMarketingConsent or smsMarketingConsent. Wasify holds
+ *     WHATSAPP consent, not SMS or email consent — and Klaviyo syncs Shopify
+ *     customers, so a wrongly-set consent leaks straight into email/SMS
+ *     campaigns. Only tags are written.
+ *   · This must never fail the signup that triggered it. It reports ok/error
+ *     instead of throwing, and the caller decides (the popup queues a retry).
  *
  * Requires the `write_customers` scope and Protected Customer Data (Level 2)
  * approval — see SETUP.md.
  */
-export async function upsertBisCustomer(
+export async function upsertShopifyCustomer(
   shop: string,
-  signup: { email?: string | null; phone: string; name?: string | null; variantIds: Array<string | number> }
-): Promise<void> {
+  person: { email?: string | null; phone: string; name?: string | null; tags: string[] }
+): Promise<{ ok: boolean; error?: string }> {
   try {
     const config = await configByStoreDomain(shop)
-    if (!config) return
+    if (!config) return { ok: false, error: `No connected store for ${shop}` }
 
-    const e164 = `+${signup.phone}`
-    const email = (signup.email ?? '').trim().toLowerCase()
+    const e164 = `+${person.phone}`
+    const email = (person.email ?? '').trim().toLowerCase()
 
     /* ------------------------------ find ------------------------------ */
     // Email first — it is the stabler identifier in Shopify — then phone.
@@ -42,8 +41,7 @@ export async function upsertBisCustomer(
       { q: search }
     )
     if (!found.ok) {
-      console.error('[bis-customer] search failed', found.error)
-      return
+      return { ok: false, error: `search failed: ${found.error}` }
     }
 
     let customerId = found.data.customers.nodes[0]?.id ?? null
@@ -64,7 +62,7 @@ export async function upsertBisCustomer(
           input: {
             ...(email ? { email } : {}),
             phone: e164,
-            ...(signup.name?.trim() ? { firstName: signup.name.trim() } : {}),
+            ...(person.name?.trim() ? { firstName: person.name.trim() } : {}),
           },
         }
       )
@@ -83,13 +81,15 @@ export async function upsertBisCustomer(
                 userErrors { field message }
               }
             }`,
-            { input: { email, ...(signup.name?.trim() ? { firstName: signup.name.trim() } : {}) } }
+            { input: { email, ...(person.name?.trim() ? { firstName: person.name.trim() } : {}) } }
           )
           customerId = retry.ok ? (retry.data?.customerCreate?.customer?.id ?? null) : null
         }
         if (!customerId) {
-          console.error('[bis-customer] create failed', created.ok ? JSON.stringify(errors) : created.error)
-          return
+          return {
+            ok: false,
+            error: `create failed: ${created.ok ? JSON.stringify(errors) : created.error}`,
+          }
         }
       }
     } else if (!existingPhone) {
@@ -105,7 +105,7 @@ export async function upsertBisCustomer(
         { input: { id: customerId, phone: e164 } }
       )
       const errors = updated.ok ? (updated.data?.customerUpdate?.userErrors ?? []) : []
-      if (errors.length) console.error('[bis-customer] phone update refused', JSON.stringify(errors))
+      if (errors.length) console.error('[shopify-customer] phone update refused', JSON.stringify(errors))
     }
 
     /* ------------------------------ tags ------------------------------ */
@@ -116,13 +116,32 @@ export async function upsertBisCustomer(
       `mutation Tag($id: ID!, $tags: [String!]!) {
         tagsAdd(id: $id, tags: $tags) { userErrors { message } }
       }`,
-      { id: customerId, tags: bisTags(signup.variantIds) }
+      { id: customerId, tags: person.tags }
     )
     const tagErrors = tagged.ok ? (tagged.data?.tagsAdd?.userErrors ?? []) : []
     if (!tagged.ok || tagErrors.length) {
-      console.error('[bis-customer] tagging failed', tagged.ok ? JSON.stringify(tagErrors) : tagged.error)
+      return {
+        ok: false,
+        error: `tagging failed: ${tagged.ok ? JSON.stringify(tagErrors) : tagged.error}`,
+      }
     }
-  } catch (e) {
-    console.error('[bis-customer] unexpected', e)
+
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message ?? e) }
   }
+}
+
+/** Back-in-stock wrapper: fire-and-forget, tags derived from the variants. */
+export async function upsertBisCustomer(
+  shop: string,
+  signup: { email?: string | null; phone: string; name?: string | null; variantIds: Array<string | number> }
+): Promise<void> {
+  const res = await upsertShopifyCustomer(shop, {
+    email: signup.email,
+    phone: signup.phone,
+    name: signup.name,
+    tags: bisTags(signup.variantIds),
+  })
+  if (!res.ok) console.error('[bis-customer]', res.error)
 }

@@ -15,6 +15,7 @@ import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { rowTagNames } from '@/app/api/contacts/import/route'
 import { prepareRows, phoneKey, phoneIndex, backfillPatch, chunk } from '@/lib/contacts-import'
 import { normalizePath, matchesRule, pageAllowed, popupBlockReason, popupPublicConfig } from '@/lib/engines/popup'
+import { pruneOldRows } from '@/lib/retention'
 import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
@@ -1598,6 +1599,50 @@ describe('recovery consent gate', () => {
     const engine = readFileSync(join(process.cwd(), 'src/lib/engines/recovery.ts'), 'utf8')
     expect(engine).toContain("prefersSpanish ? 'cliente' : 'there'")
     expect(engine).not.toContain("|| 'hola'")
+  })
+})
+
+describe('data retention', () => {
+  it('refuses to prune the three never-delete tables, by name', async () => {
+    // consent proof, the opt-in state the gate stands on, the STOP list —
+    // a retention bug here either blocks a consented customer or messages
+    // someone who said stop. The allow-list throws BEFORE any query runs.
+    for (const table of ['consent_events', 'contacts', 'suppression_list', 'messages', 'checkout_recoveries']) {
+      await expect(pruneOldRows(null, table, new Date().toISOString())).rejects.toThrow(/allow-list/)
+    }
+  })
+
+  it('prunes narrowly: payloads first, log rows at 7 days, impressions at 30', () => {
+    const retention = readFileSync(join(process.cwd(), 'src/lib/retention.ts'), 'utf8')
+    // Failed deliveries KEEP their payload for the week — debugging evidence.
+    expect(retention).toContain("['processed', 'ignored']")
+    // Batched deletes: id batches, bounded loops — never one giant DELETE.
+    expect(retention).toContain('maxLoops')
+
+    const daily = readFileSync(join(process.cwd(), 'src/app/api/cron/daily/route.ts'), 'utf8')
+    expect(daily).toContain('nullProcessedWebhookPayloads')
+    expect(daily).toContain("'shopify_webhook_events', new Date(now - 7 * day)")
+    expect(daily).toContain("'popup_events', new Date(now - 30 * day)")
+    // The measured non-problems stay untouched: raw (771 kB) and messages.
+    expect(daily).not.toContain('raw')
+    expect(daily).not.toMatch(/from\('messages'\)\s*\.delete/)
+  })
+
+  it('pushes the popup signup to Shopify at once, tag-only, with a retry queue', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/proxy/popup/subscribe/route.ts'), 'utf8')
+    expect(route).toContain("'wasify-popup'")
+    expect(route).toContain('queueShopifyPush') // failure → queue, never a blocked signup
+
+    // Tags only — Wasify holds WhatsApp consent, not SMS/email consent.
+    const customers = readFileSync(join(process.cwd(), 'src/lib/shopify/customers.ts'), 'utf8')
+    expect(customers).not.toMatch(/emailMarketingConsent\s*:/)
+    expect(customers).not.toMatch(/smsMarketingConsent\s*:/)
+
+    const queue = readFileSync(join(process.cwd(), 'src/lib/shopify/push-queue.ts'), 'utf8')
+    expect(queue).toContain('MAX_PUSH_ATTEMPTS')
+    expect(queue).toContain("status: attempts >= MAX_PUSH_ATTEMPTS ? 'failed' : 'pending'")
+    const tick = readFileSync(join(process.cwd(), 'src/app/api/cron/tick/route.ts'), 'utf8')
+    expect(tick).toContain('retryShopifyPushQueue')
   })
 })
 

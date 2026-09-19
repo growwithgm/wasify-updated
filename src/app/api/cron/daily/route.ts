@@ -4,6 +4,7 @@ import { isAuthorizedCron, cronUnauthorizedBody } from '@/lib/cron'
 import { getShopifyConfig } from '@/lib/shopify/admin'
 import { syncStore } from '@/lib/shopify/sync'
 import { recomputeRfm, refreshSegment } from '@/lib/engines/segments'
+import { pruneOldRows, nullProcessedWebhookPayloads } from '@/lib/retention'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -72,14 +73,21 @@ export async function GET(request: Request) {
   results.contactsScored = scored
   results.segmentsRefreshed = segmentsRefreshed
 
-  /* ---- prune webhook logs older than 30 days ---- */
+  /* ---- retention (see src/lib/retention.ts for the measured why) ---- */
   try {
-    const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString()
-    await db.from('whatsapp_webhook_events').delete().lt('created_at', cutoff)
-    await db.from('shopify_webhook_events').delete().lt('created_at', cutoff)
-    results.logsPruned = true
+    const day = 86400_000
+    const now = Date.now()
+    results.retention = {
+      // The 21 MB culprit: full webhook payloads. Heavy part first…
+      payloadsNulled: await nullProcessedWebhookPayloads(db, new Date(now - 1 * day).toISOString()),
+      // …then the log rows themselves at 7 days.
+      shopifyWebhookRows: await pruneOldRows(db, 'shopify_webhook_events', new Date(now - 7 * day).toISOString()),
+      whatsappWebhookRows: await pruneOldRows(db, 'whatsapp_webhook_events', new Date(now - 30 * day).toISOString()),
+      // Zero today; the fastest row-count grower once the popup is live.
+      popupEvents: await pruneOldRows(db, 'popup_events', new Date(now - 30 * day).toISOString()),
+    }
   } catch (e: any) {
-    errors.push(`prune: ${e?.message ?? e}`)
+    errors.push(`retention: ${e?.message ?? e}`)
   }
 
   return NextResponse.json({
