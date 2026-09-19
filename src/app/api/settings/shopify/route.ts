@@ -27,6 +27,12 @@ const EDITABLE = [
   'orderconf_enabled', 'orderconf_template', 'orderconf_language', 'orderconf_track_clicks',
 
   'bis_enabled', 'bis_template_es', 'bis_template_en', 'bis_track_clicks',
+
+  'popup_enabled', 'popup_include_paths', 'popup_exclude_paths',
+  'popup_heading', 'popup_subheading', 'popup_button_text', 'popup_success_text',
+  'popup_consent_text', 'popup_disclaimer',
+  'popup_trigger', 'popup_trigger_value', 'popup_dismiss_days',
+  'popup_discount_id', 'popup_template',
 ]
 
 export async function PATCH(request: Request) {

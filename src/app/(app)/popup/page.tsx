@@ -1,0 +1,406 @@
+'use client'
+
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Button, Card, CardTitle, ErrorState, Input, Page, PageHeader, Select, Textarea, Toggle,
+  ToastProvider, num, useToast,
+} from '@/components/ui'
+import { popupBlockReason, pageAllowed, normalizePath } from '@/lib/engines/popup'
+
+/**
+ * Popup admin — its own section, not a modal, because the merchant edits
+ * this constantly. Every field here is read by the storefront through the
+ * proxy config endpoint on each page load: SAVE = LIVE. No deploy, no theme
+ * edit, no cache to clear.
+ */
+
+/** Representative storefront paths the rule tester evaluates against. */
+const SAMPLE_PATHS = [
+  '/',
+  '/products/summer-dress',
+  '/collections/sale',
+  '/collections/new/products/bag',
+  '/pages/contact',
+  '/blogs/news/post',
+  '/cart',
+  '/checkouts/c/12345',
+]
+
+export default function PopupPage() {
+  return (
+    <ToastProvider>
+      <PopupScreen />
+    </ToastProvider>
+  )
+}
+
+const BLANK = {
+  popup_enabled: false,
+  popup_include_paths: ['*'] as string[],
+  popup_exclude_paths: ['/cart*', '/checkout*', '/checkouts*'] as string[],
+  popup_heading: '',
+  popup_subheading: '',
+  popup_button_text: '',
+  popup_success_text: '',
+  popup_consent_text: '',
+  popup_disclaimer: '',
+  popup_trigger: 'delay',
+  popup_trigger_value: 5,
+  popup_dismiss_days: 7,
+  popup_discount_id: null as string | null,
+  popup_template: '',
+}
+
+function PopupScreen() {
+  const toast = useToast()
+  const [form, setForm] = useState<any>(BLANK)
+  const [loaded, setLoaded] = useState(false)
+  const [noStore, setNoStore] = useState(false)
+  const [error, setError] = useState('')
+  const [discounts, setDiscounts] = useState<any[]>([])
+  const [templates, setTemplates] = useState<any[]>([])
+  const [stats, setStats] = useState<{ impressions: number; submits: number }>({ impressions: 0, submits: 0 })
+  const [saving, setSaving] = useState(false)
+  const [testPath, setTestPath] = useState('/products/summer-dress')
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const res = await fetch('/api/popup', { cache: 'no-store' })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error)
+      if (!json.config) {
+        setNoStore(true)
+      } else {
+        setForm({ ...BLANK, ...json.config })
+      }
+      setDiscounts(json.discounts ?? [])
+      setTemplates(json.templates ?? [])
+      setStats(json.stats ?? { impressions: 0, submits: 0 })
+      setLoaded(true)
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
+
+  async function save() {
+    setSaving(true)
+    try {
+      const payload: any = Object.fromEntries(
+        Object.entries(form).filter(([k]) => k.startsWith('popup_'))
+      )
+      // Blank lines from mid-edit textareas never reach the rules.
+      payload.popup_include_paths = (form.popup_include_paths ?? []).map((s: string) => s.trim()).filter(Boolean)
+      payload.popup_exclude_paths = (form.popup_exclude_paths ?? []).map((s: string) => s.trim()).filter(Boolean)
+
+      const res = await fetch('/api/settings/shopify', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const json = await res.json()
+      toast(res.ok ? 'Saved — live on the storefront now' : json.error, res.ok ? 'green' : 'red')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const blockReason = popupBlockReason(form)
+  const conversion = stats.impressions > 0 ? (stats.submits / stats.impressions) * 100 : 0
+
+  const includes = form.popup_include_paths ?? []
+  const excludes = form.popup_exclude_paths ?? []
+
+  const sampleResults = useMemo(
+    () => SAMPLE_PATHS.map((p) => ({ path: p, shown: pageAllowed(p, includes, excludes) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(includes), JSON.stringify(excludes)]
+  )
+
+  if (noStore) {
+    return (
+      <Page>
+        <PageHeader title="Popup" subtitle="WhatsApp opt-in popup" />
+        <Card>
+          <div className="py-6 text-center text-[13px]" style={{ color: 'var(--w-muted)' }}>
+            Connect a Shopify store first (Integrations) — the popup runs on your storefront.
+          </div>
+        </Card>
+      </Page>
+    )
+  }
+
+  return (
+    <Page>
+      <PageHeader
+        title="Popup"
+        subtitle="WhatsApp opt-in popup — every save is live on the storefront immediately"
+        actions={
+          <Button variant="primary" loading={saving} onClick={save} disabled={!loaded}>
+            Save changes
+          </Button>
+        }
+      />
+
+      {error && (
+        <div className="mb-4">
+          <ErrorState error={error} onRetry={load} />
+        </div>
+      )}
+
+      <div className="grid gap-4" style={{ gridTemplateColumns: 'minmax(0, 1fr) 380px' }}>
+        {/* ---------------- left: settings ---------------- */}
+        <div className="min-w-0">
+          <Card className="mb-4">
+            <Toggle
+              checked={form.popup_enabled ?? false}
+              onChange={(v: boolean) => set('popup_enabled', v)}
+              label="Popup enabled"
+              sub="Signups keep working either way — this controls whether the popup appears at all"
+            />
+            {form.popup_enabled && blockReason && (
+              <div
+                className="mt-3 rounded-lg px-3 py-2 text-[12.5px] leading-relaxed"
+                style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+              >
+                <b>Not live yet:</b> {blockReason} This reason never reaches the storefront — visitors
+                simply see nothing.
+              </div>
+            )}
+            {form.popup_enabled && !blockReason && (
+              <div
+                className="mt-3 rounded-lg px-3 py-2 text-[12.5px]"
+                style={{ background: 'var(--w-greentint)', color: '#15803D' }}
+              >
+                Live — visitors on matching pages will see the popup on their next page load.
+              </div>
+            )}
+          </Card>
+
+          <Card className="mb-4">
+            <CardTitle title="Content" sub="No length limits. An empty field simply hides that part of the popup — nothing breaks." />
+            <div className="grid gap-3">
+              <Input label="Heading" value={form.popup_heading ?? ''} onChange={(e) => set('popup_heading', e.target.value)} />
+              <Textarea label="Subheading" rows={2} value={form.popup_subheading ?? ''} onChange={(e) => set('popup_subheading', e.target.value)} />
+              <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                <Input label="Button text" value={form.popup_button_text ?? ''} onChange={(e) => set('popup_button_text', e.target.value)} />
+                <Input label="Success message" value={form.popup_success_text ?? ''} onChange={(e) => set('popup_success_text', e.target.value)} />
+              </div>
+              <Textarea
+                label="Consent checkbox text"
+                rows={3}
+                value={form.popup_consent_text ?? ''}
+                onChange={(e) => set('popup_consent_text', e.target.value)}
+                hint="The legal text. Exactly what the visitor sees here is copied into every consent record — write it with your brand name and the word WhatsApp. Never truncated."
+              />
+              <Input
+                label="Disclaimer line"
+                value={form.popup_disclaimer ?? ''}
+                onChange={(e) => set('popup_disclaimer', e.target.value)}
+                hint="Small print under the button."
+              />
+            </div>
+          </Card>
+
+          <Card className="mb-4">
+            <CardTitle
+              title="Page targeting"
+              sub="One rule per line, * is a wildcard. Exclude wins over include. Decided on the SERVER — the popup never flashes on an excluded page."
+            />
+            <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <Textarea
+                label="Show on (include)"
+                rows={4}
+                value={(includes as string[]).join('\n')}
+                onChange={(e) => set('popup_include_paths', e.target.value.split('\n'))}
+                hint="Empty (or *) = everywhere."
+              />
+              <Textarea
+                label="Never on (exclude)"
+                rows={4}
+                value={(excludes as string[]).join('\n')}
+                onChange={(e) => set('popup_exclude_paths', e.target.value.split('\n'))}
+                hint="Cart/checkout excluded by default."
+              />
+            </div>
+
+            {/* Live rule tester — so a bad rule is caught BEFORE saving. */}
+            <div className="mt-3 rounded-[10px] border p-3" style={{ borderColor: 'var(--w-border)', background: 'var(--w-card2)' }}>
+              <div className="mb-2 text-[12.5px] font-semibold">Where would it show right now?</div>
+              <div className="flex flex-wrap gap-1.5">
+                {sampleResults.map((r) => (
+                  <span
+                    key={r.path}
+                    className="rounded-full border px-2 py-[3px] text-[11.5px] font-medium"
+                    style={{
+                      background: r.shown ? 'var(--w-greentint)' : 'var(--w-errortint)',
+                      color: r.shown ? '#15803D' : '#B91C1C',
+                      borderColor: r.shown ? '#BBF7D0' : '#FCA5A5',
+                      fontFamily: "'JetBrains Mono', monospace",
+                    }}
+                  >
+                    {r.shown ? '✓' : '✗'} {r.path}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-2.5 flex items-center gap-2">
+                <input
+                  value={testPath}
+                  onChange={(e) => setTestPath(e.target.value)}
+                  placeholder="/collections/anything"
+                  className="min-w-0 flex-1 rounded-lg border px-2.5 py-1.5 text-[12.5px] outline-none"
+                  style={{ background: 'var(--w-card)', borderColor: 'var(--w-border)', fontFamily: "'JetBrains Mono', monospace" }}
+                />
+                <span
+                  className="shrink-0 rounded-full px-2.5 py-[3px] text-[11.5px] font-semibold"
+                  style={{
+                    background: pageAllowed(testPath, includes, excludes) ? 'var(--w-greentint)' : 'var(--w-errortint)',
+                    color: pageAllowed(testPath, includes, excludes) ? '#15803D' : '#B91C1C',
+                  }}
+                >
+                  {pageAllowed(testPath, includes, excludes)
+                    ? `Shows on ${normalizePath(testPath)}`
+                    : `Hidden on ${normalizePath(testPath)}`}
+                </span>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="mb-4">
+            <CardTitle title="Trigger & frequency" sub="After subscribing, the popup never shows again on that browser." />
+            <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
+              <Select label="Trigger" value={form.popup_trigger ?? 'delay'} onChange={(e) => set('popup_trigger', e.target.value)}>
+                <option value="delay">After a delay</option>
+                <option value="exit_intent">Exit intent</option>
+                <option value="scroll">After scrolling</option>
+              </Select>
+              <Input
+                label={form.popup_trigger === 'scroll' ? 'Scroll depth (%)' : 'Delay (seconds)'}
+                type="number"
+                value={String(form.popup_trigger_value ?? 5)}
+                onChange={(e) => set('popup_trigger_value', Number(e.target.value))}
+                hint={form.popup_trigger === 'exit_intent' ? 'On phones (no cursor) it falls back to this delay.' : undefined}
+              />
+              <Input
+                label="After dismiss, hide for (days)"
+                type="number"
+                value={String(form.popup_dismiss_days ?? 7)}
+                onChange={(e) => set('popup_dismiss_days', Number(e.target.value))}
+              />
+            </div>
+          </Card>
+
+          <Card>
+            <CardTitle title="Discount & delivery" sub="The code is unique per contact, generated at signup, and sent on WhatsApp." />
+            <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <Select
+                label="Discount"
+                value={form.popup_discount_id ?? ''}
+                onChange={(e) => set('popup_discount_id', e.target.value || null)}
+              >
+                <option value="">No discount — list building only</option>
+                {discounts.filter((d) => d.enabled).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.label} —{' '}
+                    {d.discount_type === 'fixed_amount' ? `${d.amount} ${d.currency}` : `${d.percentage}%`}, expires in{' '}
+                    {d.expiry_days}d
+                  </option>
+                ))}
+              </Select>
+              <Select label="WhatsApp template" value={form.popup_template ?? ''} onChange={(e) => set('popup_template', e.target.value)}>
+                <option value="">Pick a template…</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.name}>
+                    {t.name} ({t.language})
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
+              Template contract: <code style={{ fontFamily: "'JetBrains Mono', monospace" }}>{'{{1}}'}</code> = the
+              discount code (or none, for a plain welcome). A &ldquo;copy code&rdquo; button gets the customer&rsquo;s own
+              code automatically.
+            </div>
+          </Card>
+        </div>
+
+        {/* ---------------- right: preview + stats ---------------- */}
+        <div className="min-w-0">
+          <Card className="mb-4">
+            <CardTitle title="Live preview" sub="Rendered from the values on this page — exactly what the visitor gets." />
+            <div className="rounded-xl p-4" style={{ background: 'var(--w-card2)' }}>
+              <div
+                className="mx-auto max-w-[320px] rounded-2xl border p-5 shadow-lg"
+                style={{ background: 'var(--w-card)', borderColor: 'var(--w-border)' }}
+              >
+                {String(form.popup_heading ?? '').trim() && (
+                  <div className="text-[17px] font-bold leading-snug">{form.popup_heading}</div>
+                )}
+                {String(form.popup_subheading ?? '').trim() && (
+                  <div className="mt-1.5 text-[12.5px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
+                    {form.popup_subheading}
+                  </div>
+                )}
+                <div
+                  className="mt-3 rounded-lg border px-3 py-2 text-[13px]"
+                  style={{ borderColor: 'var(--w-border)', color: 'var(--w-muted)' }}
+                >
+                  +34 600 123 456
+                </div>
+                {String(form.popup_consent_text ?? '').trim() && (
+                  <label className="mt-2.5 flex items-start gap-2 text-[11px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
+                    <input type="checkbox" className="mt-0.5" readOnly checked={false} />
+                    <span>{form.popup_consent_text}</span>
+                  </label>
+                )}
+                {String(form.popup_button_text ?? '').trim() && (
+                  <div
+                    className="mt-3 rounded-lg py-2.5 text-center text-[13.5px] font-semibold text-white"
+                    style={{ background: '#16A34A' }}
+                  >
+                    {form.popup_button_text}
+                  </div>
+                )}
+                {String(form.popup_disclaimer ?? '').trim() && (
+                  <div className="mt-2 text-center text-[10.5px]" style={{ color: 'var(--w-muted)' }}>
+                    {form.popup_disclaimer}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <CardTitle title="Stats" sub="Impressions count only real renders — pages where the popup actually appeared." />
+            <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              {[
+                ['Impressions', num(stats.impressions), 'var(--w-text)'],
+                ['Submits', num(stats.submits), '#16A34A'],
+                ['Conversion', `${conversion.toFixed(1)}%`, '#2563EB'],
+              ].map(([label, value, color]) => (
+                <div
+                  key={label as string}
+                  className="rounded-lg border p-3 text-center"
+                  style={{ borderColor: 'var(--w-border)', background: 'var(--w-card2)' }}
+                >
+                  <div className="text-[18px] font-bold" style={{ color: color as string }}>
+                    {value as string}
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'var(--w-muted)' }}>
+                    {label as string}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </Page>
+  )
+}

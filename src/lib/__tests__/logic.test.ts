@@ -1486,6 +1486,19 @@ describe('popup consent capture', () => {
     expect(popupPublicConfig({ popup_trigger: 'weird' }, null).trigger.kind).toBe('delay')
   })
 
+  it('gives the admin full live control with no hardcoded or truncated content', () => {
+    // Every content field is editable and save = live: the storefront reads
+    // config on each page load, nothing is baked into the theme extension.
+    const allow = readFileSync(join(process.cwd(), 'src/app/api/settings/shopify/route.ts'), 'utf8')
+    for (const key of ['popup_consent_text', 'popup_include_paths', 'popup_trigger', 'popup_discount_id']) {
+      expect(allow).toContain(key)
+    }
+    const page = readFileSync(join(process.cwd(), 'src/app/(app)/popup/page.tsx'), 'utf8')
+    expect(page).toContain('popupBlockReason') // the why-not is shown HERE, not on the storefront
+    expect(page).toContain('pageAllowed') // live rule tester uses the real matcher
+    expect(page).not.toContain('maxLength') // no length limits on any content field
+  })
+
   it('writes consent FIRST and enforces the checkbox server-side', () => {
     const route = readFileSync(join(process.cwd(), 'src/app/proxy/popup/subscribe/route.ts'), 'utf8')
     // Server-side consent enforcement, not just a disabled button.

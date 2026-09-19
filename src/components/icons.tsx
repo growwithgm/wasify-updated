@@ -133,6 +133,15 @@ export const IconBell = (p: P) => (
   </svg>
 )
 
+export const IconPopup = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="4" y="5" width="16" height="12" rx="2" />
+    <path d="M8 21h8" />
+    <path d="M12 17v4" />
+    <path d="M9 11h6" />
+  </svg>
+)
+
 export const IconChevronDown = (p: P) => (
   <svg {...base(p)}>
     <path d="m6 9 6 6 6-6" />
