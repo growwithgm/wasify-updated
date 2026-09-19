@@ -165,6 +165,8 @@ export function popupPublicConfig(config: any, discount: any | null) {
       subheading: String(config.popup_subheading ?? ''),
       button: String(config.popup_button_text ?? ''),
       success: String(config.popup_success_text ?? ''),
+      success_note: String(config.popup_success_note ?? ''),
+      success_button: String(config.popup_success_button ?? ''),
       consent: String(config.popup_consent_text ?? ''),
       disclaimer: String(config.popup_disclaimer ?? ''),
     },

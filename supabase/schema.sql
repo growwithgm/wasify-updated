@@ -1530,14 +1530,21 @@ alter table public.shopify_config add column if not exists popup_exclude_paths j
 -- /en-es/products/x). ON = the matcher strips that prefix first, so rules
 -- written without it keep working on all 16 markets.
 alter table public.shopify_config add column if not exists popup_strip_locale boolean not null default true;
-alter table public.shopify_config add column if not exists popup_heading text not null default 'Get a discount on your first order';
-alter table public.shopify_config add column if not exists popup_subheading text not null default 'Join our WhatsApp list and we''ll send your code right away.';
-alter table public.shopify_config add column if not exists popup_button_text text not null default 'Send my code';
-alter table public.shopify_config add column if not exists popup_success_text text not null default 'Done! Check WhatsApp — your code is on the way.';
+alter table public.shopify_config add column if not exists popup_heading text not null default 'Get 10% OFF your first order';
+alter table public.shopify_config add column if not exists popup_subheading text not null default 'Enter your WhatsApp number and get your welcome discount code instantly.';
+alter table public.shopify_config add column if not exists popup_button_text text not null default 'Get my 10% OFF';
+alter table public.shopify_config add column if not exists popup_success_text text not null default 'Your 10% OFF is activated';
 -- The EXACT text next to the consent checkbox. Legally load-bearing: what
--- the customer saw is copied into consent_events on every submit.
-alter table public.shopify_config add column if not exists popup_consent_text text not null default 'I agree to receive order updates and marketing messages from this store on WhatsApp. Reply STOP at any time to unsubscribe.';
-alter table public.shopify_config add column if not exists popup_disclaimer text not null default 'A few messages a month at most. No spam.';
+-- the customer saw is copied into consent_events on every submit. This
+-- default is a PLACEHOLDER — the merchant writes their own (brand name +
+-- the word "WhatsApp") before go-live.
+alter table public.shopify_config add column if not exists popup_consent_text text not null default 'I agree to receive my discount code and occasional offers on WhatsApp. Reply STOP at any time to unsubscribe.';
+alter table public.shopify_config add column if not exists popup_disclaimer text not null default 'No spam. Unsubscribe anytime.';
+-- The dark success screen under the code: a small note and the button that
+-- closes the popup. (No "applied automatically at checkout" claim here —
+-- codes are sent, not auto-applied.)
+alter table public.shopify_config add column if not exists popup_success_note text not null default 'Limited-time code — use it soon. We also sent it to you on WhatsApp.';
+alter table public.shopify_config add column if not exists popup_success_button text not null default 'Continue shopping';
 -- Triggers are INDEPENDENT toggles that can run together. popup_trigger_all:
 -- false = OR (whichever fires first opens the popup), true = AND (every
 -- enabled condition must be met).

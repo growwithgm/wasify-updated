@@ -2,42 +2,59 @@
  * Wasify WhatsApp popup — storefront runtime.
  *
  * Order of operations, and why:
- *   1. localStorage gates first: subscribed = nothing, ever. Dismissed =
- *      the POPUP stays hidden until the stamped date, but the TEASER tab
- *      may still render (its config says so) — so the visitor can reopen
- *      it themselves without being re-imposed on.
- *   2. Shopify Customer Privacy check — the popup IS marketing, so in
+ *   1. B2B gate: the popup is for DTC shoppers. The liquid block sets
+ *      data-b2b for logged-in B2B/company/wholesale customers — for them
+ *      this script does NOTHING, not even a config call.
+ *   2. localStorage gates: subscribed = nothing, ever. Dismissed = the
+ *      POPUP stays hidden until the stamped date, but the TEASER tab may
+ *      still render so the visitor can reopen it themselves.
+ *   3. Shopify Customer Privacy check — the popup IS marketing, so in
  *      consent regions nothing runs (not even the config call) until
  *      marketing is allowed. If consent arrives later, we retry once.
- *   3. Config from the App Proxy. Page/device/logged-in-customer targeting
+ *   4. Config from the App Proxy. Page/device/logged-in-customer targeting
  *      was decided on the SERVER: show:false means neither popup nor teaser
  *      exists on this page — no flash.
- *   4. Triggers: independent conditions (exit / delay / scroll) that can be
- *      armed together — OR by default, AND when triggers.all is set. This
- *      mirrors triggerSatisfied() in the app's popup engine.
- *   5. Render. All content comes from config as textContent — nothing is
- *      hardcoded here, empty fields simply don't render.
+ *   5. Triggers: independent conditions (exit / delay / scroll), OR by
+ *      default, AND when triggers.all is set — mirrors triggerSatisfied()
+ *      in the app's popup engine.
+ *   6. Render. All merchant content comes from config as textContent —
+ *      empty fields simply don't render. The country dial prefix updates
+ *      itself from the storefront's localization (data-country).
  */
 (function () {
   'use strict';
 
   var root = document.getElementById('wasify-popup-root');
   if (!root) return;
+  if (root.getAttribute('data-b2b') === '1') return; // DTC only
 
   var PROXY = (root.getAttribute('data-proxy') || '/apps/wasify').replace(/\/+$/, '');
-  var COUNTRY = root.getAttribute('data-country') || 'ES';
+  var COUNTRY = (root.getAttribute('data-country') || 'ES').toUpperCase();
   var LOCALE = root.getAttribute('data-locale') || 'en';
   var KEY_DONE = 'wasify_popup_done';
   var KEY_HIDE = 'wasify_popup_hide_until';
 
-  /* ---- 1: local gates (never throw in private windows) ---- */
+  /* Dial codes for the storefront's markets (and the usual traffic). The
+     prefix box auto-updates from data-country; an unknown country simply
+     shows no prefix and the visitor types the full number. */
+  var DIAL = {
+    ES: '34', DE: '49', FR: '33', IT: '39', NL: '31', BE: '32', PT: '351', GB: '44',
+    IE: '353', AT: '43', CH: '41', SE: '46', DK: '45', NO: '47', FI: '358', PL: '48',
+    CZ: '420', GR: '30', HU: '36', RO: '40', BG: '359', HR: '385', SI: '386', SK: '421',
+    LT: '370', LV: '371', EE: '372', LU: '352', MT: '356', CY: '357', US: '1', CA: '1',
+    MX: '52', AU: '61', NZ: '64', AE: '971', SA: '966', KW: '965', QA: '974', BH: '973',
+    OM: '968', JO: '962', EG: '20', MA: '212', TR: '90', PK: '92', IN: '91', UA: '380'
+  };
+  var dial = DIAL[COUNTRY] || '';
+
+  /* ---- local gates (never throw in private windows) ---- */
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
   if (lsGet(KEY_DONE)) return;
   var dismissed = Date.now() < (parseInt(lsGet(KEY_HIDE) || '0', 10) || 0);
 
-  /* ---- 2: customer privacy ---- */
+  /* ---- customer privacy ---- */
   var retried = false;
   function whenMarketingAllowed(next) {
     var cp = window.Shopify && window.Shopify.customerPrivacy;
@@ -46,8 +63,6 @@
     var allowed = false;
     try {
       if (typeof cp.firstPartyMarketingAllowed === 'function') {
-        // Region-aware: true where no regulation applies, and true after
-        // consent where one does.
         allowed = cp.firstPartyMarketingAllowed();
       } else if (typeof cp.currentVisitorConsent === 'function') {
         // Older API: only an explicit yes counts — an undecided EU visitor
@@ -60,7 +75,6 @@
 
     if (allowed) return next();
 
-    // Consent may be granted after page load (the banner). One retry.
     document.addEventListener('visitorConsentCollected', function onConsent() {
       if (retried) return;
       retried = true;
@@ -69,7 +83,7 @@
     });
   }
 
-  /* ---- 3: config ---- */
+  /* ---- config ---- */
   function fetchConfig() {
     var qs = '?path=' + encodeURIComponent(location.pathname) + (dismissed ? '&mode=teaser' : '');
     fetch(PROXY + '/popup/config' + qs, { credentials: 'omit' })
@@ -77,8 +91,7 @@
       .then(function (cfg) {
         if (!cfg || !cfg.enabled || !cfg.show) return;
         if (dismissed) {
-          // Frequency rules bind the POPUP, not the teaser: no auto-open,
-          // but the visitor may reopen it by hand.
+          // Frequency rules bind the POPUP, not the teaser.
           if (cfg.teaser) showTeaser(cfg);
           return;
         }
@@ -87,7 +100,7 @@
       .catch(function () {});
   }
 
-  /* ---- 4: triggers — independent, OR by default, AND when cfg says so ---- */
+  /* ---- triggers — independent, OR by default, AND when cfg says so ---- */
   function arm(cfg) {
     var t = cfg.triggers || {};
     var met = { exit: false, delay: false, scroll: false };
@@ -153,7 +166,7 @@
     if (teaserEl || !cfg.teaser) return;
     teaserEl = el('button', 'wasify-popup-teaser wasify-popup-teaser--' +
       (cfg.teaser.position === 'bottom-left' ? 'left' : 'right'), cfg.teaser.text || '');
-    if (!teaserEl.textContent) { teaserEl = null; return; } // empty text = no teaser, nothing breaks
+    if (!teaserEl.textContent) { teaserEl = null; return; }
     teaserEl.addEventListener('click', function () {
       hideTeaser();
       open(cfg);
@@ -189,12 +202,17 @@
 
     var form = el('form', 'wasify-popup-form');
 
+    // Phone row: the dial prefix follows the storefront country. No known
+    // dial code → no prefix box, the visitor types the full number.
+    var phoneRow = el('div', 'wasify-popup-phone-row');
+    if (dial) phoneRow.appendChild(el('div', 'wasify-popup-prefix', '+' + dial));
     var phone = el('input', 'wasify-popup-phone');
     phone.type = 'tel';
     phone.name = 'phone';
     phone.autocomplete = 'tel';
-    phone.placeholder = '+34 600 123 456';
-    form.appendChild(phone);
+    phone.placeholder = dial ? '600 123 456' : '+34 600 123 456';
+    phoneRow.appendChild(phone);
+    form.appendChild(phoneRow);
 
     // Honeypot — humans never see it, bots love it.
     var hp = el('input', 'wasify-popup-hp');
@@ -249,6 +267,49 @@
       if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); dismiss(); }
     });
 
+    /* The number that goes to the server: prefixed input stays national and
+       gets the dial code; anything typed as full international is respected. */
+    function fullPhone() {
+      var raw = phone.value.trim();
+      if (!dial || raw.charAt(0) === '+' || raw.indexOf('00') === 0) return raw;
+      return '+' + dial + raw;
+    }
+
+    function showSuccess(code) {
+      lsSet(KEY_DONE, '1');
+      hideTeaser();
+      form.remove();
+      card.classList.add('wasify-popup-card--dark');
+
+      var check = el('div', 'wasify-popup-check', '✓');
+      card.appendChild(check);
+      if (c.success) card.appendChild(el('div', 'wasify-popup-success', c.success));
+
+      if (code) {
+        var box = el('div', 'wasify-popup-codebox');
+        box.appendChild(el('div', 'wasify-popup-code', code));
+        var copy = el('button', 'wasify-popup-copy', 'Copy');
+        copy.type = 'button';
+        copy.addEventListener('click', function () {
+          try {
+            navigator.clipboard.writeText(code).then(function () { copy.textContent = '✓ Copied'; });
+          } catch (e) {
+            copy.textContent = code; // clipboard blocked → at least show it plainly
+          }
+        });
+        box.appendChild(copy);
+        card.appendChild(box);
+      }
+
+      if (c.success_note) card.appendChild(el('div', 'wasify-popup-note', c.success_note));
+      if (c.success_button) {
+        var done = el('button', 'wasify-popup-continue', c.success_button);
+        done.type = 'button';
+        done.addEventListener('click', function () { overlay.remove(); });
+        card.appendChild(done);
+      }
+    }
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       btn.disabled = true;
@@ -259,7 +320,7 @@
         headers: { 'Content-Type': 'application/json' },
         credentials: 'omit',
         body: JSON.stringify({
-          phone: phone.value,
+          phone: fullPhone(),
           country_code: COUNTRY,
           locale: LOCALE,
           hp: hp.value,
@@ -276,11 +337,7 @@
             refresh();
             return;
           }
-          lsSet(KEY_DONE, '1');
-          hideTeaser();
-          form.remove();
-          if (c.success) card.appendChild(el('div', 'wasify-popup-success', c.success));
-          if (res.j && res.j.code) card.appendChild(el('div', 'wasify-popup-code', res.j.code));
+          showSuccess(res.j && res.j.code);
         })
         .catch(function () {
           err.textContent = 'Network error — please try again.';

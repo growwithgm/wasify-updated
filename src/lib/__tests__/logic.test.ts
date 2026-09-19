@@ -1604,6 +1604,50 @@ describe('popup consent capture', () => {
     expect(js).toContain('(pointer: fine)') // exit-intent falls back to delay on touch
   })
 
+  it('is DTC-only, dials the country prefix, and ends on the dark code screen', () => {
+    // B2B gate: Liquid computes it — only Liquid knows who is logged in —
+    // covering Shopify B2B proper and the usual wholesale tags…
+    const liquid = readFileSync(join(process.cwd(), 'extensions/wasify-popup/blocks/popup.liquid'), 'utf8')
+    expect(liquid).toContain('customer.b2b?')
+    expect(liquid).toContain("contains 'wholesale'")
+    expect(liquid).toContain('data-b2b')
+    // …and for a B2B customer the JS does NOTHING, not even a config call.
+    const js = readFileSync(join(process.cwd(), 'extensions/wasify-popup/assets/wasify-popup.js'), 'utf8')
+    expect(js).toContain("getAttribute('data-b2b')")
+    expect(js.indexOf("getAttribute('data-b2b')")).toBeLessThan(js.indexOf('fetchConfig'))
+    // The dial prefix follows the storefront country; a number typed as
+    // full international (+… / 00…) is respected as-is.
+    expect(js).toContain('data-country')
+    expect(js).toContain("ES: '34'")
+    expect(js).toContain('fullPhone')
+    // Success = the dark monochrome card: check, code box, copy, continue.
+    expect(js).toContain('wasify-popup-card--dark')
+    expect(js).toContain('navigator.clipboard')
+    expect(js).toContain('success_note')
+    expect(js).toContain('success_button')
+    const css = readFileSync(join(process.cwd(), 'extensions/wasify-popup/assets/wasify-popup.css'), 'utf8')
+    expect(css).toContain('.wasify-popup-card--dark')
+    expect(css).toContain('#0a0a0a')
+    expect(css).not.toMatch(/#16a34a/i) // the old green theme is gone
+
+    // The two success-screen strings travel through the public config…
+    const pub = popupPublicConfig(
+      { popup_success_note: 'Use it soon', popup_success_button: 'Continue shopping' },
+      null
+    )
+    expect(pub.content.success_note).toBe('Use it soon')
+    expect(pub.content.success_button).toBe('Continue shopping')
+    // …are merchant-editable like every other content field…
+    const allow = readFileSync(join(process.cwd(), 'src/app/api/settings/shopify/route.ts'), 'utf8')
+    expect(allow).toContain('popup_success_note')
+    expect(allow).toContain('popup_success_button')
+    // …and the schema seeds the design copy for new tenants.
+    const schema = readFileSync(join(process.cwd(), 'supabase/schema.sql'), 'utf8')
+    expect(schema).toContain('popup_success_note')
+    expect(schema).toContain('popup_success_button')
+    expect(schema).toContain('10% OFF')
+  })
+
   it('writes consent FIRST and enforces the checkbox server-side', () => {
     const route = readFileSync(join(process.cwd(), 'src/app/proxy/popup/subscribe/route.ts'), 'utf8')
     // Server-side consent enforcement, not just a disabled button.

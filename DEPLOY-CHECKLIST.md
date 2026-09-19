@@ -60,7 +60,9 @@ khule. `/api/health` green ho.
 2. **Popup page:**
    - **Consent checkbox text: APNA legal text** — brand ka naam + lafz
      "WhatsApp" dono ho. (English defaults ke sath go-live NAHI.)
-   - Heading / subheading / button / success / disclaimer
+   - Heading / subheading / button / success / success note /
+     success-screen button / disclaimer (defaults naye monochrome design
+     ki copy hain — "10% OFF" apne asli discount se mila lein)
    - Discount select + WhatsApp template select
    - Triggers (default: delay 5s ON), Devices, page rules (default
      home + products theek hai), teaser text

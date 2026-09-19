@@ -45,6 +45,8 @@ const BLANK = {
   popup_subheading: '',
   popup_button_text: '',
   popup_success_text: '',
+  popup_success_note: '',
+  popup_success_button: '',
   popup_consent_text: '',
   popup_disclaimer: '',
   popup_trigger_exit: false,
@@ -73,6 +75,18 @@ function PopupScreen() {
   const [stats, setStats] = useState<{ impressions: number; submits: number }>({ impressions: 0, submits: 0 })
   const [saving, setSaving] = useState(false)
   const [testPath, setTestPath] = useState('/products/summer-dress')
+
+  // Inline discount creator — the merchant should not have to leave this
+  // page (Catalog) just to have a code the popup can hand out.
+  const [creatingDiscount, setCreatingDiscount] = useState(false)
+  const [discountSaving, setDiscountSaving] = useState(false)
+  const [newDiscount, setNewDiscount] = useState({
+    label: 'Popup welcome',
+    discount_type: 'percentage',
+    percentage: 10,
+    amount: 10,
+    expiry_days: 2,
+  })
 
   const load = useCallback(async () => {
     setError('')
@@ -119,6 +133,34 @@ function PopupScreen() {
       toast(res.ok ? 'Saved — live on the storefront now' : json.error, res.ok ? 'green' : 'red')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function createDiscount() {
+    if (!newDiscount.label.trim()) {
+      toast('Give the discount a label', 'red')
+      return
+    }
+    setDiscountSaving(true)
+    try {
+      const res = await fetch('/api/discounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...newDiscount, enabled: true }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast(json.error ?? 'Could not create the discount', 'red')
+        return
+      }
+      // Straight into the list AND selected — but only saved with the page's
+      // own Save button, like every other field here.
+      setDiscounts((list) => [...list, json.discount])
+      set('popup_discount_id', json.discount.id)
+      setCreatingDiscount(false)
+      toast('Discount created and selected — remember to Save', 'green')
+    } finally {
+      setDiscountSaving(false)
     }
   }
 
@@ -206,6 +248,20 @@ function PopupScreen() {
               <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <Input label="Button text" value={form.popup_button_text ?? ''} onChange={(e) => set('popup_button_text', e.target.value)} />
                 <Input label="Success message" value={form.popup_success_text ?? ''} onChange={(e) => set('popup_success_text', e.target.value)} />
+              </div>
+              <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 200px' }}>
+                <Input
+                  label="Success note"
+                  value={form.popup_success_note ?? ''}
+                  onChange={(e) => set('popup_success_note', e.target.value)}
+                  hint="Small line under the code on the success screen."
+                />
+                <Input
+                  label="Success screen button"
+                  value={form.popup_success_button ?? ''}
+                  onChange={(e) => set('popup_success_button', e.target.value)}
+                  hint="Closes the popup."
+                />
               </div>
               <Textarea
                 label="Consent checkbox text"
@@ -439,6 +495,64 @@ function PopupScreen() {
                 ))}
               </Select>
             </div>
+            {!creatingDiscount ? (
+              <div className="mt-2">
+                <Button variant="ghost" onClick={() => setCreatingDiscount(true)}>
+                  + New discount
+                </Button>
+              </div>
+            ) : (
+              <div
+                className="mt-3 rounded-[10px] border p-3"
+                style={{ borderColor: 'var(--w-border)', background: 'var(--w-card2)' }}
+              >
+                <div className="mb-2 text-[12.5px] font-semibold">New discount</div>
+                <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                  <Input
+                    label="Label"
+                    value={newDiscount.label}
+                    onChange={(e) => setNewDiscount((d) => ({ ...d, label: e.target.value }))}
+                  />
+                  <Select
+                    label="Type"
+                    value={newDiscount.discount_type}
+                    onChange={(e) => setNewDiscount((d) => ({ ...d, discount_type: e.target.value }))}
+                  >
+                    <option value="percentage">Percentage off</option>
+                    <option value="fixed_amount">Fixed amount off</option>
+                  </Select>
+                  {newDiscount.discount_type === 'fixed_amount' ? (
+                    <Input
+                      label="Amount"
+                      type="number"
+                      value={String(newDiscount.amount)}
+                      onChange={(e) => setNewDiscount((d) => ({ ...d, amount: Number(e.target.value) }))}
+                    />
+                  ) : (
+                    <Input
+                      label="Percentage (%)"
+                      type="number"
+                      value={String(newDiscount.percentage)}
+                      onChange={(e) => setNewDiscount((d) => ({ ...d, percentage: Number(e.target.value) }))}
+                    />
+                  )}
+                  <Input
+                    label="Expires after (days)"
+                    type="number"
+                    value={String(newDiscount.expiry_days)}
+                    onChange={(e) => setNewDiscount((d) => ({ ...d, expiry_days: Number(e.target.value) }))}
+                  />
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <Button variant="primary" loading={discountSaving} onClick={createDiscount}>
+                    Create &amp; select
+                  </Button>
+                  <Button variant="ghost" onClick={() => setCreatingDiscount(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
               Template contract: <code style={{ fontFamily: "'JetBrains Mono', monospace" }}>{'{{1}}'}</code> = the
               discount code (or none, for a plain welcome). A &ldquo;copy code&rdquo; button gets the customer&rsquo;s own
@@ -451,42 +565,108 @@ function PopupScreen() {
         <div className="min-w-0">
           <Card className="mb-4">
             <CardTitle title="Live preview" sub="Rendered from the values on this page — exactly what the visitor gets." />
+            {/* The storefront popup is fixed monochrome, so the preview uses
+                the design's real colors, not the admin theme. */}
             <div className="rounded-xl p-4" style={{ background: 'var(--w-card2)' }}>
               <div
-                className="mx-auto max-w-[320px] rounded-2xl border p-5 shadow-lg"
-                style={{ background: 'var(--w-card)', borderColor: 'var(--w-border)' }}
+                className="mx-auto max-w-[320px] rounded-[4px] p-6 text-center shadow-lg"
+                style={{ background: '#FFFFFF', color: '#111111' }}
               >
                 {String(form.popup_heading ?? '').trim() && (
-                  <div className="text-[17px] font-bold leading-snug">{form.popup_heading}</div>
+                  <div
+                    className="text-[20px] leading-snug"
+                    style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+                  >
+                    {form.popup_heading}
+                  </div>
                 )}
                 {String(form.popup_subheading ?? '').trim() && (
-                  <div className="mt-1.5 text-[12.5px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
+                  <div className="mt-2 text-[12px] leading-relaxed" style={{ color: '#555555' }}>
                     {form.popup_subheading}
                   </div>
                 )}
                 <div
-                  className="mt-3 rounded-lg border px-3 py-2 text-[13px]"
-                  style={{ borderColor: 'var(--w-border)', color: 'var(--w-muted)' }}
+                  className="mt-3.5 flex items-stretch overflow-hidden rounded-[3px] text-left"
+                  style={{ border: '1px solid #111111' }}
                 >
-                  +34 600 123 456
+                  <span
+                    className="flex items-center px-2.5 text-[13px]"
+                    style={{ background: '#F7F7F5', borderRight: '1px solid #E3E3E0' }}
+                  >
+                    +34
+                  </span>
+                  <span className="flex-1 px-2.5 py-2 text-[13px]" style={{ color: '#A8A8A6' }}>
+                    600 123 456
+                  </span>
                 </div>
                 {String(form.popup_consent_text ?? '').trim() && (
-                  <label className="mt-2.5 flex items-start gap-2 text-[11px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
-                    <input type="checkbox" className="mt-0.5" readOnly checked={false} />
+                  <label
+                    className="mt-3 flex items-start gap-2 text-left text-[10.5px] leading-relaxed"
+                    style={{ color: '#555555' }}
+                  >
+                    <input type="checkbox" className="mt-0.5" readOnly checked={false} style={{ accentColor: '#111111' }} />
                     <span>{form.popup_consent_text}</span>
                   </label>
                 )}
                 {String(form.popup_button_text ?? '').trim() && (
                   <div
-                    className="mt-3 rounded-lg py-2.5 text-center text-[13.5px] font-semibold text-white"
-                    style={{ background: '#16A34A' }}
+                    className="mt-3.5 rounded-[3px] py-2.5 text-center text-[12px] font-semibold uppercase text-white"
+                    style={{ background: '#111111', letterSpacing: '0.12em' }}
                   >
                     {form.popup_button_text}
                   </div>
                 )}
                 {String(form.popup_disclaimer ?? '').trim() && (
-                  <div className="mt-2 text-center text-[10.5px]" style={{ color: 'var(--w-muted)' }}>
+                  <div className="mt-2.5 text-center text-[10.5px]" style={{ color: '#A8A8A6' }}>
                     {form.popup_disclaimer}
+                  </div>
+                )}
+              </div>
+
+              {/* After submit: the dark success screen. */}
+              <div
+                className="mx-auto mt-4 max-w-[320px] rounded-[4px] p-6 text-center shadow-lg"
+                style={{ background: '#0A0A0A', color: '#FFFFFF' }}
+              >
+                <div
+                  className="mx-auto flex h-9 w-9 items-center justify-center rounded-full text-[18px] font-bold"
+                  style={{ background: '#FFFFFF', color: '#0A0A0A' }}
+                >
+                  ✓
+                </div>
+                {String(form.popup_success_text ?? '').trim() && (
+                  <div
+                    className="mt-3 text-[18px] leading-snug"
+                    style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+                  >
+                    {form.popup_success_text}
+                  </div>
+                )}
+                <div className="mt-3.5 rounded-[3px] p-3" style={{ border: '1px dashed #4A4A48' }}>
+                  <div
+                    className="text-[16px] font-bold"
+                    style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.22em' }}
+                  >
+                    WELCOME10
+                  </div>
+                  <div
+                    className="mx-auto mt-2 inline-block rounded-[3px] px-3.5 py-1 text-[11px]"
+                    style={{ border: '1px solid #4A4A48' }}
+                  >
+                    Copy
+                  </div>
+                </div>
+                {String(form.popup_success_note ?? '').trim() && (
+                  <div className="mt-3 text-[11px] leading-relaxed" style={{ color: '#A8A8A6' }}>
+                    {form.popup_success_note}
+                  </div>
+                )}
+                {String(form.popup_success_button ?? '').trim() && (
+                  <div
+                    className="mt-3.5 rounded-[3px] py-2.5 text-center text-[12px] font-semibold uppercase"
+                    style={{ background: '#FFFFFF', color: '#0A0A0A', letterSpacing: '0.12em' }}
+                  >
+                    {form.popup_success_button}
                   </div>
                 )}
               </div>

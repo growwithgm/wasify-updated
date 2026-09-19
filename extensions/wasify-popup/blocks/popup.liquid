@@ -6,14 +6,31 @@
   show and where — so the merchant's admin edits are live on the next page
   load without touching the theme or redeploying this extension.
 
+  data-b2b: the popup is for DTC shoppers only. A logged-in B2B/company
+  customer (Shopify B2B, or the usual wholesale tags) never sees it — the
+  flag is computed HERE because only Liquid knows who is logged in. A
+  logged-OUT wholesale visitor cannot be detected; exclude the wholesale
+  pages with a page rule for that.
+
   The only settings here are the ones Shopify forces us to carry in the
   theme: the App Proxy subpath (must match the app's Proxy configuration).
 {%- endcomment -%}
+{%- liquid
+  assign wasify_b2b = '0'
+  if customer
+    if customer.b2b?
+      assign wasify_b2b = '1'
+    elsif customer.tags contains 'wholesale' or customer.tags contains 'Wholesale' or customer.tags contains 'b2b' or customer.tags contains 'B2B'
+      assign wasify_b2b = '1'
+    endif
+  endif
+-%}
 <div
   id="wasify-popup-root"
   data-proxy="{{ block.settings.proxy_path | default: '/apps/wasify' }}"
   data-country="{{ localization.country.iso_code | default: 'ES' }}"
   data-locale="{{ request.locale.iso_code | default: 'en' }}"
+  data-b2b="{{ wasify_b2b }}"
 ></div>
 
 {% schema %}

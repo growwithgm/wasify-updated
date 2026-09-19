@@ -30,6 +30,7 @@ const EDITABLE = [
 
   'popup_enabled', 'popup_include_paths', 'popup_exclude_paths', 'popup_strip_locale',
   'popup_heading', 'popup_subheading', 'popup_button_text', 'popup_success_text',
+  'popup_success_note', 'popup_success_button',
   'popup_consent_text', 'popup_disclaimer',
   'popup_trigger_exit', 'popup_trigger_delay', 'popup_trigger_delay_seconds',
   'popup_trigger_scroll', 'popup_trigger_scroll_pct', 'popup_trigger_all',
