@@ -1523,8 +1523,13 @@ alter table public.shopify_config add column if not exists bis_track_clicks bool
 -- theme change and no deploy. No length limits on purpose.
 alter table public.shopify_config add column if not exists popup_enabled boolean not null default false;
 -- Page rules: JSON arrays of path patterns with * wildcards. Exclude wins.
-alter table public.shopify_config add column if not exists popup_include_paths jsonb not null default '["*"]'::jsonb;
+-- Default: HOME and PRODUCT pages only — everything else stays quiet.
+alter table public.shopify_config add column if not exists popup_include_paths jsonb not null default '["/", "/products/*"]'::jsonb;
 alter table public.shopify_config add column if not exists popup_exclude_paths jsonb not null default '["/cart*", "/checkout*", "/checkouts*"]'::jsonb;
+-- Multi-market stores prefix every path with a locale (/de/products/x,
+-- /en-es/products/x). ON = the matcher strips that prefix first, so rules
+-- written without it keep working on all 16 markets.
+alter table public.shopify_config add column if not exists popup_strip_locale boolean not null default true;
 alter table public.shopify_config add column if not exists popup_heading text not null default 'Get a discount on your first order';
 alter table public.shopify_config add column if not exists popup_subheading text not null default 'Join our WhatsApp list and we''ll send your code right away.';
 alter table public.shopify_config add column if not exists popup_button_text text not null default 'Send my code';
@@ -1533,11 +1538,26 @@ alter table public.shopify_config add column if not exists popup_success_text te
 -- the customer saw is copied into consent_events on every submit.
 alter table public.shopify_config add column if not exists popup_consent_text text not null default 'I agree to receive order updates and marketing messages from this store on WhatsApp. Reply STOP at any time to unsubscribe.';
 alter table public.shopify_config add column if not exists popup_disclaimer text not null default 'A few messages a month at most. No spam.';
--- Trigger: 'delay' (value = seconds) | 'exit_intent' | 'scroll' (value = %)
-alter table public.shopify_config add column if not exists popup_trigger text not null default 'delay';
-alter table public.shopify_config add column if not exists popup_trigger_value integer not null default 5;
+-- Triggers are INDEPENDENT toggles that can run together. popup_trigger_all:
+-- false = OR (whichever fires first opens the popup), true = AND (every
+-- enabled condition must be met).
+alter table public.shopify_config add column if not exists popup_trigger_exit boolean not null default false;
+alter table public.shopify_config add column if not exists popup_trigger_delay boolean not null default true;
+alter table public.shopify_config add column if not exists popup_trigger_delay_seconds integer not null default 5;
+alter table public.shopify_config add column if not exists popup_trigger_scroll boolean not null default false;
+alter table public.shopify_config add column if not exists popup_trigger_scroll_pct integer not null default 40;
+alter table public.shopify_config add column if not exists popup_trigger_all boolean not null default false;
 -- After a dismiss, stay hidden this many days. After a subscribe: forever.
 alter table public.shopify_config add column if not exists popup_dismiss_days integer not null default 7;
+-- The teaser tab that stays on the screen edge after a dismiss, so the
+-- visitor can reopen the popup themselves. Frequency rules bind the POPUP,
+-- never the teaser.
+alter table public.shopify_config add column if not exists popup_teaser_enabled boolean not null default true;
+alter table public.shopify_config add column if not exists popup_teaser_text text not null default 'Get your discount';
+alter table public.shopify_config add column if not exists popup_teaser_position text not null default 'bottom-right';  -- bottom-right | bottom-left
+-- Device targeting, decided server-side from the request user-agent:
+-- all | desktop | mobile
+alter table public.shopify_config add column if not exists popup_devices text not null default 'all';
 alter table public.shopify_config add column if not exists popup_discount_id uuid references public.discounts(id) on delete set null;
 -- WhatsApp template that carries the code. Contract: {{1}} = discount code
 -- (or a copy-code button, which gets the per-contact code as its coupon).

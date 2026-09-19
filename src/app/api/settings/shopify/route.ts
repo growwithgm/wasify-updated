@@ -28,10 +28,14 @@ const EDITABLE = [
 
   'bis_enabled', 'bis_template_es', 'bis_template_en', 'bis_track_clicks',
 
-  'popup_enabled', 'popup_include_paths', 'popup_exclude_paths',
+  'popup_enabled', 'popup_include_paths', 'popup_exclude_paths', 'popup_strip_locale',
   'popup_heading', 'popup_subheading', 'popup_button_text', 'popup_success_text',
   'popup_consent_text', 'popup_disclaimer',
-  'popup_trigger', 'popup_trigger_value', 'popup_dismiss_days',
+  'popup_trigger_exit', 'popup_trigger_delay', 'popup_trigger_delay_seconds',
+  'popup_trigger_scroll', 'popup_trigger_scroll_pct', 'popup_trigger_all',
+  'popup_dismiss_days',
+  'popup_teaser_enabled', 'popup_teaser_text', 'popup_teaser_position',
+  'popup_devices',
   'popup_discount_id', 'popup_template',
 ]
 

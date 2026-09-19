@@ -29,6 +29,25 @@ export function normalizePath(input: string | null | undefined): string {
   return path.toLowerCase()
 }
 
+/** The out-of-the-box page rules: home and product pages, nothing else. */
+export const DEFAULT_INCLUDE_PATHS = ['/', '/products/*']
+export const DEFAULT_EXCLUDE_PATHS = ['/cart*', '/checkout*', '/checkouts*']
+
+/**
+ * Strip a leading Shopify locale segment — /de/products/x, /en-es/products/x
+ * — so merchant rules written WITHOUT the prefix still match on a
+ * multi-market store. Without this, '/products/*' silently never matches on
+ * 15 of 16 markets and nobody notices. Toggleable (popup_strip_locale,
+ * default ON) because a store could genuinely have a two-letter page like
+ * /tv — the admin hint says so.
+ */
+export function stripLocalePrefix(path: string): string {
+  const p = normalizePath(path)
+  const m = p.match(/^\/[a-z]{2}(?:-[a-z]{2})?(\/.*)?$/i)
+  if (!m) return p
+  return m[1] ? normalizePath(m[1]) : '/'
+}
+
 /** One rule ('/collections/*', '*', '/pages/contact') against one path. */
 export function matchesRule(path: string, rule: string): boolean {
   const cleanRule = normalizePath(rule.replace(/\*/g, '\u0000')).replace(/\u0000/g, '*')
@@ -49,14 +68,47 @@ export function matchesRule(path: string, rule: string): boolean {
 export function pageAllowed(
   path: string,
   includes: unknown,
-  excludes: unknown
+  excludes: unknown,
+  opts: { stripLocale?: boolean } = {}
 ): boolean {
+  const p = opts.stripLocale ? stripLocalePrefix(path) : normalizePath(path)
   const inc = (Array.isArray(includes) ? includes : []).map(String).filter((s) => s.trim())
   const exc = (Array.isArray(excludes) ? excludes : []).map(String).filter((s) => s.trim())
 
-  if (exc.some((rule) => matchesRule(path, rule))) return false
+  if (exc.some((rule) => matchesRule(p, rule))) return false
   if (inc.length === 0) return true
-  return inc.some((rule) => matchesRule(path, rule))
+  return inc.some((rule) => matchesRule(p, rule))
+}
+
+/** Coarse but honest: the standard mobile UA markers. */
+export function isMobileUA(ua: string | null | undefined): boolean {
+  return /Mobi|Android|iPhone|iPod|iPad|Windows Phone/i.test(ua ?? '')
+}
+
+/** Device targeting, decided on the SERVER from the request's user-agent. */
+export function deviceAllowed(setting: string | null | undefined, ua: string | null | undefined): boolean {
+  if (setting === 'desktop') return !isMobileUA(ua)
+  if (setting === 'mobile') return isMobileUA(ua)
+  return true
+}
+
+/**
+ * Multiple triggers, armed together. `met` says which conditions have
+ * happened; the config says which are enabled and whether ALL of them must
+ * hold (AND) or any one is enough (OR, the default). No trigger enabled =
+ * the popup can never open — popupBlockReason refuses that upstream.
+ * The extension JS mirrors this exact logic.
+ */
+export function triggerSatisfied(
+  met: { exit?: boolean; delay?: boolean; scroll?: boolean },
+  cfg: { all?: boolean; exit?: boolean; delay?: boolean; scroll?: boolean }
+): boolean {
+  const enabled: boolean[] = []
+  if (cfg.exit) enabled.push(!!met.exit)
+  if (cfg.delay) enabled.push(!!met.delay)
+  if (cfg.scroll) enabled.push(!!met.scroll)
+  if (!enabled.length) return false
+  return cfg.all ? enabled.every(Boolean) : enabled.some(Boolean)
 }
 
 /**
@@ -75,6 +127,9 @@ export function popupBlockReason(config: any): string | null {
   if (!String(config.popup_button_text ?? '').trim()) {
     return 'Button text is empty.'
   }
+  if (!config.popup_trigger_exit && !config.popup_trigger_delay && !config.popup_trigger_scroll) {
+    return 'No trigger is enabled — with all three off the popup can never open.'
+  }
   if (config.popup_discount_id && !String(config.popup_template ?? '').trim()) {
     return 'A discount is selected but no WhatsApp template is set to deliver the code.'
   }
@@ -88,13 +143,23 @@ export function popupBlockReason(config: any): string | null {
  */
 export function popupPublicConfig(config: any, discount: any | null) {
   return {
-    trigger: {
-      kind: ['delay', 'exit_intent', 'scroll'].includes(config.popup_trigger)
-        ? config.popup_trigger
-        : 'delay',
-      value: Number(config.popup_trigger_value ?? 5),
+    triggers: {
+      all: !!config.popup_trigger_all,
+      exit: !!config.popup_trigger_exit,
+      delay: config.popup_trigger_delay
+        ? { seconds: Math.max(1, Number(config.popup_trigger_delay_seconds ?? 5)) }
+        : null,
+      scroll: config.popup_trigger_scroll
+        ? { pct: Math.max(1, Math.min(100, Number(config.popup_trigger_scroll_pct ?? 40))) }
+        : null,
     },
     frequency: { dismiss_days: Number(config.popup_dismiss_days ?? 7) },
+    teaser: config.popup_teaser_enabled
+      ? {
+          text: String(config.popup_teaser_text ?? ''),
+          position: config.popup_teaser_position === 'bottom-left' ? 'bottom-left' : 'bottom-right',
+        }
+      : null,
     content: {
       heading: String(config.popup_heading ?? ''),
       subheading: String(config.popup_subheading ?? ''),

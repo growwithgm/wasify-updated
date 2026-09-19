@@ -14,7 +14,7 @@ import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { rowTagNames } from '@/app/api/contacts/import/route'
 import { prepareRows, phoneKey, phoneIndex, backfillPatch, chunk } from '@/lib/contacts-import'
-import { normalizePath, matchesRule, pageAllowed, popupBlockReason, popupPublicConfig } from '@/lib/engines/popup'
+import { normalizePath, matchesRule, pageAllowed, popupBlockReason, popupPublicConfig, stripLocalePrefix, triggerSatisfied, deviceAllowed, isMobileUA, DEFAULT_INCLUDE_PATHS, DEFAULT_EXCLUDE_PATHS } from '@/lib/engines/popup'
 import { pruneOldRows } from '@/lib/retention'
 import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
@@ -1458,11 +1458,12 @@ describe('popup consent capture', () => {
     expect(pageAllowed('/collections/hidden-x', ['/collections/*'], ['/collections/hidden*'])).toBe(false)
   })
 
-  it('blocks going live without consent text, button text, or a delivery template', () => {
+  it('blocks going live without consent text, button text, a trigger, or a delivery template', () => {
     const ok = {
       popup_enabled: true,
       popup_consent_text: 'I agree…',
       popup_button_text: 'Send',
+      popup_trigger_delay: true,
       popup_discount_id: null,
       popup_template: '',
     }
@@ -1470,21 +1471,103 @@ describe('popup consent capture', () => {
     expect(popupBlockReason({ ...ok, popup_enabled: false })).toContain('off')
     expect(popupBlockReason({ ...ok, popup_consent_text: '  ' })).toContain('Consent text')
     expect(popupBlockReason({ ...ok, popup_button_text: '' })).toContain('Button')
+    expect(popupBlockReason({ ...ok, popup_trigger_delay: false })).toContain('trigger')
     expect(popupBlockReason({ ...ok, popup_discount_id: 'x' })).toContain('template')
     expect(popupBlockReason({ ...ok, popup_discount_id: 'x', popup_template: 'welcome_code' })).toBeNull()
   })
 
   it('passes empty content fields through — the popup hides them, never breaks', () => {
     const pub = popupPublicConfig(
-      { popup_heading: '', popup_subheading: null, popup_button_text: 'Go', popup_trigger: 'scroll', popup_trigger_value: 40, popup_dismiss_days: 7 },
+      {
+        popup_heading: '',
+        popup_subheading: null,
+        popup_button_text: 'Go',
+        popup_trigger_scroll: true,
+        popup_trigger_scroll_pct: 40,
+        popup_dismiss_days: 7,
+        popup_teaser_enabled: true,
+        popup_teaser_text: 'Your code is waiting',
+        popup_teaser_position: 'bottom-left',
+      },
       null
     )
     expect(pub.content.heading).toBe('')
     expect(pub.content.subheading).toBe('')
-    expect(pub.trigger).toEqual({ kind: 'scroll', value: 40 })
+    expect(pub.triggers.scroll).toEqual({ pct: 40 })
+    expect(pub.triggers.delay).toBeNull() // disabled trigger travels as null
+    expect(pub.teaser).toEqual({ text: 'Your code is waiting', position: 'bottom-left' })
     expect(pub.discount).toBeNull()
-    // Unknown trigger value degrades to the safe default, not a crash.
-    expect(popupPublicConfig({ popup_trigger: 'weird' }, null).trigger.kind).toBe('delay')
+    // Teaser off = null; a bogus position degrades to bottom-right.
+    expect(popupPublicConfig({ popup_teaser_enabled: false }, null).teaser).toBeNull()
+    expect(popupPublicConfig({ popup_teaser_enabled: true, popup_teaser_position: 'weird' }, null).teaser?.position).toBe('bottom-right')
+  })
+
+  it('combines triggers with OR by default and AND when asked', () => {
+    const cfg = { exit: true, delay: true, scroll: false }
+    // OR: any one enabled condition that happened is enough.
+    expect(triggerSatisfied({ delay: true }, cfg)).toBe(true)
+    expect(triggerSatisfied({ scroll: true }, cfg)).toBe(false) // scroll isn't enabled
+    expect(triggerSatisfied({}, cfg)).toBe(false)
+    // AND: every enabled condition must have happened.
+    const all = { ...cfg, all: true }
+    expect(triggerSatisfied({ delay: true }, all)).toBe(false)
+    expect(triggerSatisfied({ delay: true, exit: true }, all)).toBe(true)
+    // Nothing enabled can never fire — blockReason refuses it upstream too.
+    expect(triggerSatisfied({ delay: true }, { exit: false, delay: false, scroll: false })).toBe(false)
+  })
+
+  it('decides devices on the server from the user-agent', () => {
+    const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148'
+    const desktop = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0'
+    expect(isMobileUA(iphone)).toBe(true)
+    expect(isMobileUA(desktop)).toBe(false)
+    expect(deviceAllowed('all', iphone)).toBe(true)
+    expect(deviceAllowed('mobile', iphone)).toBe(true)
+    expect(deviceAllowed('mobile', desktop)).toBe(false)
+    expect(deviceAllowed('desktop', iphone)).toBe(false)
+    expect(deviceAllowed('desktop', desktop)).toBe(true)
+  })
+
+  it('strips locale prefixes so rules survive 16 markets', () => {
+    // /de/products/x must count as a product page, /de as home — otherwise
+    // every rule silently fails on 15 of 16 markets and nobody notices.
+    expect(stripLocalePrefix('/de/products/xyz')).toBe('/products/xyz')
+    expect(stripLocalePrefix('/en-es/products/xyz')).toBe('/products/xyz')
+    expect(stripLocalePrefix('/de')).toBe('/')
+    expect(stripLocalePrefix('/products/xyz')).toBe('/products/xyz') // no prefix, untouched
+
+    const inc = DEFAULT_INCLUDE_PATHS
+    const exc = DEFAULT_EXCLUDE_PATHS
+    const strip = { stripLocale: true }
+    expect(pageAllowed('/de/products/xyz', inc, exc, strip)).toBe(true)
+    expect(pageAllowed('/de', inc, exc, strip)).toBe(true)
+    expect(pageAllowed('/fr/collections/sale', inc, exc, strip)).toBe(false)
+    // Toggle OFF: the prefix stays and the rule no longer matches.
+    expect(pageAllowed('/de/products/xyz', inc, exc, { stripLocale: false })).toBe(false)
+  })
+
+  it('defaults to home and product pages only', () => {
+    const inc = DEFAULT_INCLUDE_PATHS
+    const exc = DEFAULT_EXCLUDE_PATHS
+    expect(pageAllowed('/', inc, exc)).toBe(true)
+    expect(pageAllowed('/products/summer-dress', inc, exc)).toBe(true)
+    for (const blocked of ['/collections/sale', '/cart', '/checkouts/c/1', '/search', '/blogs/news/x', '/policies/privacy', '/account']) {
+      expect(pageAllowed(blocked, inc, exc)).toBe(false)
+    }
+    // And the schema hands the same default to every new tenant.
+    const schema = readFileSync(join(process.cwd(), 'supabase/schema.sql'), 'utf8')
+    expect(schema).toContain(`'["/", "/products/*"]'`)
+  })
+
+  it('skips the popup for a logged-in customer who already opted in — and never guesses', () => {
+    const cfg = readFileSync(join(process.cwd(), 'src/app/proxy/popup/config/route.ts'), 'utf8')
+    expect(cfg).toContain('logged_in_customer_id')
+    // The contacts lookup lives INSIDE the if(customerId) guard: no id, no
+    // lookup, no guessing.
+    expect(cfg).toContain('if (customerId)')
+    expect(cfg.indexOf('if (customerId)')).toBeLessThan(cfg.indexOf("shopify_customer_id"))
+    expect(cfg).toContain('deviceAllowed') // device decided server-side too
+    expect(cfg).toContain("get('mode')") // teaser page loads don't count as impressions
   })
 
   it('gives the admin full live control with no hardcoded or truncated content', () => {
@@ -1514,7 +1597,11 @@ describe('popup consent capture', () => {
     expect(js).toContain('visitorConsentCollected') // and a retry when consent arrives late
     expect(js).toContain('textContent') // config strings render as data, never markup
     expect(js).toContain('wasify_popup_done') // subscribed = never again
-    expect(js).toContain('wasify_popup_hide_until') // dismissed = wait N days, no network
+    expect(js).toContain('wasify_popup_hide_until') // dismissed = popup waits N days…
+    expect(js).toContain('mode=teaser') // …while teaser page loads skip the impression count
+    expect(js).toContain('wasify-popup-teaser') // the reopen tab
+    expect(js).toContain('t.all') // AND/OR mirror of triggerSatisfied()
+    expect(js).toContain('(pointer: fine)') // exit-intent falls back to delay on touch
   })
 
   it('writes consent FIRST and enforces the checkbox server-side', () => {

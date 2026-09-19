@@ -111,3 +111,21 @@
   border-radius: 10px;
   padding: 10px;
 }
+
+/* The teaser tab that stays on the screen edge after a dismiss. */
+.wasify-popup-teaser {
+  position: fixed;
+  bottom: 16px;
+  z-index: 2147482999;
+  border: 0;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 16px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.wasify-popup-teaser--right { right: 16px; }
+.wasify-popup-teaser--left { left: 16px; }

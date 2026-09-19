@@ -14,14 +14,16 @@ import { popupBlockReason, pageAllowed, normalizePath } from '@/lib/engines/popu
  * edit, no cache to clear.
  */
 
-/** Representative storefront paths the rule tester evaluates against. */
+/** Representative storefront paths the rule tester evaluates against —
+ *  including locale-prefixed ones, because 15 of 16 markets carry a prefix. */
 const SAMPLE_PATHS = [
   '/',
+  '/de',
   '/products/summer-dress',
+  '/en-es/products/summer-dress',
+  '/fr/collections/sale',
   '/collections/sale',
-  '/collections/new/products/bag',
   '/pages/contact',
-  '/blogs/news/post',
   '/cart',
   '/checkouts/c/12345',
 ]
@@ -36,17 +38,26 @@ export default function PopupPage() {
 
 const BLANK = {
   popup_enabled: false,
-  popup_include_paths: ['*'] as string[],
+  popup_include_paths: ['/', '/products/*'] as string[],
   popup_exclude_paths: ['/cart*', '/checkout*', '/checkouts*'] as string[],
+  popup_strip_locale: true,
   popup_heading: '',
   popup_subheading: '',
   popup_button_text: '',
   popup_success_text: '',
   popup_consent_text: '',
   popup_disclaimer: '',
-  popup_trigger: 'delay',
-  popup_trigger_value: 5,
+  popup_trigger_exit: false,
+  popup_trigger_delay: true,
+  popup_trigger_delay_seconds: 5,
+  popup_trigger_scroll: false,
+  popup_trigger_scroll_pct: 40,
+  popup_trigger_all: false,
   popup_dismiss_days: 7,
+  popup_teaser_enabled: true,
+  popup_teaser_text: 'Get your discount',
+  popup_teaser_position: 'bottom-right',
+  popup_devices: 'all',
   popup_discount_id: null as string | null,
   popup_template: '',
 }
@@ -118,9 +129,13 @@ function PopupScreen() {
   const excludes = form.popup_exclude_paths ?? []
 
   const sampleResults = useMemo(
-    () => SAMPLE_PATHS.map((p) => ({ path: p, shown: pageAllowed(p, includes, excludes) })),
+    () =>
+      SAMPLE_PATHS.map((p) => ({
+        path: p,
+        shown: pageAllowed(p, includes, excludes, { stripLocale: form.popup_strip_locale ?? true }),
+      })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [JSON.stringify(includes), JSON.stringify(excludes)]
+    [JSON.stringify(includes), JSON.stringify(excludes), form.popup_strip_locale]
   )
 
   if (noStore) {
@@ -230,6 +245,15 @@ function PopupScreen() {
               />
             </div>
 
+            <div className="mt-3">
+              <Toggle
+                checked={form.popup_strip_locale ?? true}
+                onChange={(v: boolean) => set('popup_strip_locale', v)}
+                label="Ignore locale prefixes (/de/…, /en-es/…)"
+                sub="Multi-market stores prefix every path with a locale. ON = rules written without the prefix work on all markets. Turn OFF only if you have a real two-letter page like /tv."
+              />
+            </div>
+
             {/* Live rule tester — so a bad rule is caught BEFORE saving. */}
             <div className="mt-3 rounded-[10px] border p-3" style={{ borderColor: 'var(--w-border)', background: 'var(--w-card2)' }}>
               <div className="mb-2 text-[12.5px] font-semibold">Where would it show right now?</div>
@@ -260,11 +284,15 @@ function PopupScreen() {
                 <span
                   className="shrink-0 rounded-full px-2.5 py-[3px] text-[11.5px] font-semibold"
                   style={{
-                    background: pageAllowed(testPath, includes, excludes) ? 'var(--w-greentint)' : 'var(--w-errortint)',
-                    color: pageAllowed(testPath, includes, excludes) ? '#15803D' : '#B91C1C',
+                    background: pageAllowed(testPath, includes, excludes, { stripLocale: form.popup_strip_locale ?? true })
+                      ? 'var(--w-greentint)'
+                      : 'var(--w-errortint)',
+                    color: pageAllowed(testPath, includes, excludes, { stripLocale: form.popup_strip_locale ?? true })
+                      ? '#15803D'
+                      : '#B91C1C',
                   }}
                 >
-                  {pageAllowed(testPath, includes, excludes)
+                  {pageAllowed(testPath, includes, excludes, { stripLocale: form.popup_strip_locale ?? true })
                     ? `Shows on ${normalizePath(testPath)}`
                     : `Hidden on ${normalizePath(testPath)}`}
                 </span>
@@ -273,26 +301,115 @@ function PopupScreen() {
           </Card>
 
           <Card className="mb-4">
-            <CardTitle title="Trigger & frequency" sub="After subscribing, the popup never shows again on that browser." />
-            <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
-              <Select label="Trigger" value={form.popup_trigger ?? 'delay'} onChange={(e) => set('popup_trigger', e.target.value)}>
-                <option value="delay">After a delay</option>
-                <option value="exit_intent">Exit intent</option>
-                <option value="scroll">After scrolling</option>
-              </Select>
-              <Input
-                label={form.popup_trigger === 'scroll' ? 'Scroll depth (%)' : 'Delay (seconds)'}
-                type="number"
-                value={String(form.popup_trigger_value ?? 5)}
-                onChange={(e) => set('popup_trigger_value', Number(e.target.value))}
-                hint={form.popup_trigger === 'exit_intent' ? 'On phones (no cursor) it falls back to this delay.' : undefined}
+            <CardTitle
+              title="Triggers"
+              sub="Any combination can be on at once. Default is OR — whichever fires first opens the popup."
+            />
+            <div className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Toggle
+                  checked={form.popup_trigger_delay ?? true}
+                  onChange={(v: boolean) => set('popup_trigger_delay', v)}
+                  label="Time delay"
+                  sub="Open after N seconds on the page"
+                />
+                {form.popup_trigger_delay && (
+                  <Input
+                    label="Seconds"
+                    type="number"
+                    value={String(form.popup_trigger_delay_seconds ?? 5)}
+                    onChange={(e) => set('popup_trigger_delay_seconds', Number(e.target.value))}
+                  />
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Toggle
+                  checked={form.popup_trigger_scroll ?? false}
+                  onChange={(v: boolean) => set('popup_trigger_scroll', v)}
+                  label="Scroll depth"
+                  sub="Open once the visitor has scrolled this far"
+                />
+                {form.popup_trigger_scroll && (
+                  <Input
+                    label="Depth (%)"
+                    type="number"
+                    value={String(form.popup_trigger_scroll_pct ?? 40)}
+                    onChange={(e) => set('popup_trigger_scroll_pct', Number(e.target.value))}
+                  />
+                )}
+              </div>
+
+              <Toggle
+                checked={form.popup_trigger_exit ?? false}
+                onChange={(v: boolean) => set('popup_trigger_exit', v)}
+                label="Exit intent"
+                sub="Cursor leaves toward the top of the window. Phones have no cursor — there it falls back to the delay."
               />
+
+              <div className="rounded-lg px-3 py-2" style={{ background: 'var(--w-card2)' }}>
+                <Toggle
+                  checked={form.popup_trigger_all ?? false}
+                  onChange={(v: boolean) => set('popup_trigger_all', v)}
+                  label="Only show if ALL selected conditions are met"
+                  sub="OFF = OR (first one wins). ON = AND (every enabled trigger must happen first)."
+                />
+              </div>
+            </div>
+          </Card>
+
+          <Card className="mb-4">
+            <CardTitle
+              title="Frequency, teaser & devices"
+              sub="After subscribing, the popup never shows again on that browser."
+            />
+            <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
               <Input
-                label="After dismiss, hide for (days)"
+                label="After dismiss, hide popup for (days)"
                 type="number"
                 value={String(form.popup_dismiss_days ?? 7)}
                 onChange={(e) => set('popup_dismiss_days', Number(e.target.value))}
               />
+              <Select
+                label="Devices"
+                value={form.popup_devices ?? 'all'}
+                onChange={(e) => set('popup_devices', e.target.value)}
+              >
+                <option value="all">All devices</option>
+                <option value="desktop">Desktop only</option>
+                <option value="mobile">Mobile only</option>
+              </Select>
+            </div>
+            <div className="mt-1.5 text-[11.5px]" style={{ color: 'var(--w-muted)' }}>
+              The device decision is made on the server from the visitor&apos;s browser — nothing loads
+              on the wrong device.
+            </div>
+
+            <div className="mt-4">
+              <Toggle
+                checked={form.popup_teaser_enabled ?? true}
+                onChange={(v: boolean) => set('popup_teaser_enabled', v)}
+                label="Teaser tab after dismiss"
+                sub="A small tab stays on the screen edge so the visitor can reopen the popup themselves. Frequency rules bind the popup, never the teaser."
+              />
+              {form.popup_teaser_enabled && (
+                <div className="mt-3 grid gap-3" style={{ gridTemplateColumns: '1fr 200px' }}>
+                  <Input
+                    label="Teaser text"
+                    value={form.popup_teaser_text ?? ''}
+                    onChange={(e) => set('popup_teaser_text', e.target.value)}
+                    hint="Empty text = no teaser; nothing breaks."
+                  />
+                  <Select
+                    label="Position"
+                    value={form.popup_teaser_position ?? 'bottom-right'}
+                    onChange={(e) => set('popup_teaser_position', e.target.value)}
+                  >
+                    <option value="bottom-right">Bottom right</option>
+                    <option value="bottom-left">Bottom left</option>
+                  </Select>
+                </div>
+              )}
             </div>
           </Card>
 

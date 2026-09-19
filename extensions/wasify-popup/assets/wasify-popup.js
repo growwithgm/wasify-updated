@@ -2,15 +2,20 @@
  * Wasify WhatsApp popup — storefront runtime.
  *
  * Order of operations, and why:
- *   1. localStorage gates first (subscribed = never again; dismissed = wait
- *      N days) — zero network for returning visitors.
+ *   1. localStorage gates first: subscribed = nothing, ever. Dismissed =
+ *      the POPUP stays hidden until the stamped date, but the TEASER tab
+ *      may still render (its config says so) — so the visitor can reopen
+ *      it themselves without being re-imposed on.
  *   2. Shopify Customer Privacy check — the popup IS marketing, so in
  *      consent regions nothing runs (not even the config call) until
  *      marketing is allowed. If consent arrives later, we retry once.
- *   3. Config from the App Proxy. Page targeting was decided on the SERVER:
- *      show:false means this popup never existed on this page — no flash.
- *   4. Trigger (delay / scroll / exit-intent), then render. All content
- *      comes from config and is inserted as textContent — nothing is
+ *   3. Config from the App Proxy. Page/device/logged-in-customer targeting
+ *      was decided on the SERVER: show:false means neither popup nor teaser
+ *      exists on this page — no flash.
+ *   4. Triggers: independent conditions (exit / delay / scroll) that can be
+ *      armed together — OR by default, AND when triggers.all is set. This
+ *      mirrors triggerSatisfied() in the app's popup engine.
+ *   5. Render. All content comes from config as textContent — nothing is
  *      hardcoded here, empty fields simply don't render.
  */
 (function () {
@@ -30,7 +35,7 @@
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
   if (lsGet(KEY_DONE)) return;
-  if (Date.now() < (parseInt(lsGet(KEY_HIDE) || '0', 10) || 0)) return;
+  var dismissed = Date.now() < (parseInt(lsGet(KEY_HIDE) || '0', 10) || 0);
 
   /* ---- 2: customer privacy ---- */
   var retried = false;
@@ -66,39 +71,97 @@
 
   /* ---- 3: config ---- */
   function fetchConfig() {
-    fetch(PROXY + '/popup/config?path=' + encodeURIComponent(location.pathname), { credentials: 'omit' })
+    var qs = '?path=' + encodeURIComponent(location.pathname) + (dismissed ? '&mode=teaser' : '');
+    fetch(PROXY + '/popup/config' + qs, { credentials: 'omit' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (cfg) {
         if (!cfg || !cfg.enabled || !cfg.show) return;
+        if (dismissed) {
+          // Frequency rules bind the POPUP, not the teaser: no auto-open,
+          // but the visitor may reopen it by hand.
+          if (cfg.teaser) showTeaser(cfg);
+          return;
+        }
         arm(cfg);
       })
       .catch(function () {});
   }
 
-  /* ---- 4: trigger ---- */
+  /* ---- 4: triggers — independent, OR by default, AND when cfg says so ---- */
   function arm(cfg) {
-    var t = cfg.trigger || { kind: 'delay', value: 5 };
+    var t = cfg.triggers || {};
+    var met = { exit: false, delay: false, scroll: false };
     var opened = false;
-    function once() { if (!opened) { opened = true; open(cfg); } }
+    var cleanups = [];
 
-    if (t.kind === 'scroll') {
-      var pct = Math.max(1, Math.min(100, t.value || 40));
+    // Mirrors triggerSatisfied() in src/lib/engines/popup.ts.
+    function satisfied() {
+      var enabled = [];
+      if (t.exit) enabled.push(met.exit);
+      if (t.delay) enabled.push(met.delay);
+      if (t.scroll) enabled.push(met.scroll);
+      if (!enabled.length) return false;
+      if (t.all) {
+        for (var i = 0; i < enabled.length; i++) if (!enabled[i]) return false;
+        return true;
+      }
+      for (var j = 0; j < enabled.length; j++) if (enabled[j]) return true;
+      return false;
+    }
+
+    function check() {
+      if (opened || !satisfied()) return;
+      opened = true;
+      for (var i = 0; i < cleanups.length; i++) cleanups[i]();
+      open(cfg);
+    }
+
+    if (t.delay) {
+      var timer = setTimeout(function () { met.delay = true; check(); }, t.delay.seconds * 1000);
+      cleanups.push(function () { clearTimeout(timer); });
+    }
+
+    if (t.scroll) {
       var onScroll = function () {
         var h = document.documentElement;
-        var scrolled = (h.scrollTop + window.innerHeight) / h.scrollHeight * 100;
-        if (scrolled >= pct) { window.removeEventListener('scroll', onScroll); once(); }
+        var pct = (h.scrollTop + window.innerHeight) / h.scrollHeight * 100;
+        if (pct >= t.scroll.pct) { met.scroll = true; check(); }
       };
       window.addEventListener('scroll', onScroll, { passive: true });
+      cleanups.push(function () { window.removeEventListener('scroll', onScroll); });
       onScroll();
-    } else if (t.kind === 'exit_intent' && window.matchMedia && window.matchMedia('(pointer: fine)').matches) {
-      document.documentElement.addEventListener('mouseleave', function onLeave(e) {
-        if (e.clientY <= 0) { document.documentElement.removeEventListener('mouseleave', onLeave); once(); }
-      });
-    } else {
-      // 'delay' — and the exit-intent fallback on touch screens, where there
-      // is no cursor to leave with.
-      setTimeout(once, Math.max(1, t.value || 5) * 1000);
     }
+
+    if (t.exit) {
+      if (window.matchMedia && window.matchMedia('(pointer: fine)').matches) {
+        var onLeave = function (e) { if (e.clientY <= 0) { met.exit = true; check(); } };
+        document.documentElement.addEventListener('mouseleave', onLeave);
+        cleanups.push(function () { document.documentElement.removeEventListener('mouseleave', onLeave); });
+      } else {
+        // No cursor to leave with on touch screens — the agreed fallback is
+        // a delay, using the delay seconds when set, else 12s.
+        var fallback = setTimeout(function () { met.exit = true; check(); },
+          ((t.delay && t.delay.seconds) || 12) * 1000);
+        cleanups.push(function () { clearTimeout(fallback); });
+      }
+    }
+  }
+
+  /* ---- teaser tab ---- */
+  var teaserEl = null;
+  function showTeaser(cfg) {
+    if (teaserEl || !cfg.teaser) return;
+    teaserEl = el('button', 'wasify-popup-teaser wasify-popup-teaser--' +
+      (cfg.teaser.position === 'bottom-left' ? 'left' : 'right'), cfg.teaser.text || '');
+    if (!teaserEl.textContent) { teaserEl = null; return; } // empty text = no teaser, nothing breaks
+    teaserEl.addEventListener('click', function () {
+      hideTeaser();
+      open(cfg);
+    });
+    document.body.appendChild(teaserEl);
+  }
+  function hideTeaser() {
+    if (teaserEl) { teaserEl.remove(); teaserEl = null; }
   }
 
   /* ---- render ---- */
@@ -177,6 +240,8 @@
       var days = (cfg.frequency && cfg.frequency.dismiss_days) || 7;
       lsSet(KEY_HIDE, String(Date.now() + days * 86400000));
       overlay.remove();
+      // The tab stays behind so they can come back — their choice, not ours.
+      if (cfg.teaser) showTeaser(cfg);
     }
     close.addEventListener('click', dismiss);
     overlay.addEventListener('click', function (e) { if (e.target === overlay) dismiss(); });
@@ -212,6 +277,7 @@
             return;
           }
           lsSet(KEY_DONE, '1');
+          hideTeaser();
           form.remove();
           if (c.success) card.appendChild(el('div', 'wasify-popup-success', c.success));
           if (res.j && res.j.code) card.appendChild(el('div', 'wasify-popup-code', res.j.code));
