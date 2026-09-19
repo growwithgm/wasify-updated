@@ -39,6 +39,8 @@ export function recoveryLabel(recovery: any, hasPhone: boolean): { text: string;
   switch (recovery.status) {
     case 'skipped_no_phone':
       return { text: 'WhatsApp number missing', tone: 'amber' }
+    case 'skipped_no_consent':
+      return { text: 'No marketing opt-in', tone: 'gray' }
     case 'suppressed_cooldown':
       return { text: 'Suppressed (cooldown)', tone: 'gray' }
     case 'skipped_too_old':

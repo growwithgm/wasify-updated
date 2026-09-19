@@ -1566,6 +1566,13 @@ alter table public.consent_events add column if not exists consent_text text;
 alter table public.consent_events add column if not exists page_url text;
 alter table public.consent_events add column if not exists ip text;
 
+-- A popup opt-in from a number that once said STOP does NOT reopen
+-- marketing: the suppression row STAYS (a past STOP is the strongest
+-- block/report predictor Meta quality has) and only carries this stamp.
+-- The merchant reviews "re-consented after STOP" in Settings and clears
+-- the row BY HAND when they choose to.
+alter table public.suppression_list add column if not exists re_opted_in_at timestamptz;
+
 -- audit_log is service-role only: RLS on, and no policy at all means
 -- authenticated clients can never read or write it.
 alter table public.audit_log enable row level security;

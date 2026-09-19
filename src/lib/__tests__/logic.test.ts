@@ -6,7 +6,7 @@ import { sanitizePhone, isValidPhone, phonesMatch, phoneVariants, extractShopify
 import { sessionWindow, canSendFreeText, appendMessage, WINDOW_MS } from '@/lib/window'
 import { normalize, matchesKeyword } from '@/lib/engines/types'
 import { isCodOrder, buildOrderVars } from '@/lib/engines/cod'
-import { urlSuffix, reminderPatch, MAX_SEND_ATTEMPTS, recoveryAnchor, tooOldToStart } from '@/lib/engines/recovery'
+import { urlSuffix, reminderPatch, MAX_SEND_ATTEMPTS, recoveryAnchor, tooOldToStart, marketingAllowed } from '@/lib/engines/recovery'
 import { matchesDefinition, rfmLabel } from '@/lib/engines/segments'
 import { bestFaq } from '@/lib/engines/chatbot'
 import { validateTemplate } from '@/app/api/templates/[id]/submit/route'
@@ -1496,8 +1496,10 @@ describe('popup consent capture', () => {
     expect(route.indexOf("from('consent_events')")).toBeLessThan(route.indexOf('sendTemplate('))
     // The proof fields of the record.
     for (const field of ['consent_text', 'page_url', 'ip', 'phone']) expect(route).toContain(field)
-    // Fresh explicit opt-in clears an old STOP, with the event as audit trail.
-    expect(route).toContain("from('suppression_list').delete()")
+    // A re-opt-in after STOP STAMPS the suppression row — it never deletes
+    // it. Marketing stays blocked until the merchant clears it by hand.
+    expect(route).toContain('re_opted_in_at')
+    expect(route).not.toContain("from('suppression_list').delete()")
     // Both proxy endpoints verify the Shopify signature and fail closed.
     const cfg = readFileSync(join(process.cwd(), 'src/app/proxy/popup/config/route.ts'), 'utf8')
     for (const src of [route, cfg]) {
@@ -1512,6 +1514,60 @@ describe('popup consent capture', () => {
     for (const col of ['popup_consent_text', 'popup_include_paths', 'popup_events', 'consent_text']) {
       expect(schema).toContain(col)
     }
+  })
+})
+
+describe('recovery consent gate', () => {
+  it('allows only an explicit opt-in with no suppression row', () => {
+    // Opt-IN model: a checkout phone was given for shipping, not marketing.
+    expect(marketingAllowed('opted_in', '34600111222', [])).toBe(true)
+    expect(marketingAllowed('unknown', '34600111222', [])).toBe(false)
+    expect(marketingAllowed('opted_out', '34600111222', [])).toBe(false)
+    expect(marketingAllowed(null, '34600111222', [])).toBe(false)
+    expect(marketingAllowed('opted_in', null, [])).toBe(false)
+  })
+
+  it('keeps a re-consented-after-STOP number blocked until the merchant clears it', () => {
+    // The suppression row outranks opt_in_status='opted_in' — a past STOP
+    // is the strongest block/report predictor Meta quality has. Only the
+    // merchant deleting the row (Settings) reopens marketing.
+    expect(marketingAllowed('opted_in', '34600111222', ['34600111222'])).toBe(false)
+    expect(marketingAllowed('opted_in', '600111222', ['34600111222'])).toBe(false) // last-8 match
+    expect(marketingAllowed('opted_in', '34600111222', ['34999888777'])).toBe(true)
+  })
+
+  it('gates INTAKE and SEND, and the STOP handler resets the re-consent stamp', () => {
+    const engine = readFileSync(join(process.cwd(), 'src/lib/engines/recovery.ts'), 'utf8')
+    // skipped_no_consent is written at intake AND at send-time — the send
+    // gate re-checks on every sweep, never trusting intake.
+    expect(engine.split('skipped_no_consent').length).toBeGreaterThanOrEqual(4)
+    expect(engine).toContain('marketingAllowed(')
+    // A parked no-phone row re-activates THROUGH the gate, never around it.
+    expect(engine).toContain("allowed ? 'active' : 'skipped_no_consent'")
+    // A fresh STOP wipes an earlier popup re-consent stamp.
+    expect(engine).toContain('re_opted_in_at: null')
+    // The carts page names the new status instead of showing a blank.
+    const carts = readFileSync(join(process.cwd(), 'src/app/(app)/carts/page.tsx'), 'utf8')
+    expect(carts).toContain("case 'skipped_no_consent'")
+    // Settings surfaces the re-consented list for manual review.
+    const settings = readFileSync(join(process.cwd(), 'src/app/(app)/settings/page.tsx'), 'utf8')
+    expect(settings).toContain('re-consented after')
+  })
+
+  it('closes recoveries for orders that carry no checkout link, by phone', () => {
+    // Draft/manual/POS orders can arrive without checkout_id/checkout_token
+    // and without a matchable contact — the phone is the last thing tying
+    // the paid order to the active sequence.
+    const webhook = readFileSync(join(process.cwd(), 'src/app/api/shopify/webhook/route.ts'), 'utf8')
+    const fn = webhook.slice(webhook.indexOf('closeRecoveriesForOrder'))
+    expect(fn).toContain('extractShopifyPhone')
+    expect(fn).toContain('phonesMatch')
+  })
+
+  it('greets in the template language when the checkout has no name', () => {
+    const engine = readFileSync(join(process.cwd(), 'src/lib/engines/recovery.ts'), 'utf8')
+    expect(engine).toContain("prefersSpanish ? 'cliente' : 'there'")
+    expect(engine).not.toContain("|| 'hola'")
   })
 })
 

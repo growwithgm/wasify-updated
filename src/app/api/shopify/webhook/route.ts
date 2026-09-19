@@ -7,7 +7,7 @@ import { startCodConfirmation, upsertOrderFromWebhook, refreshContactRollups } f
 import { upsertCheckoutFromWebhook, ensureCheckoutRecovery } from '@/lib/engines/recovery'
 import { logActivity, notify } from '@/lib/contacts'
 import { COMPLIANCE_TOPICS } from '@/lib/shopify/webhooks'
-import { phonesMatch, sanitizePhone } from '@/lib/phone'
+import { phonesMatch, sanitizePhone, extractShopifyPhone } from '@/lib/phone'
 
 /** Tenant lookup that does not need a working token — GDPR topics only. */
 async function tenantByStoreDomain(db: any, domain: string): Promise<{ user_id: string } | null> {
@@ -306,5 +306,22 @@ async function closeRecoveriesForOrder(db: any, userId: string, payload: any, or
       .eq('user_id', userId)
       .eq('contact_id', order.contact_id)
       .eq('status', 'active')
+  }
+
+  // Last resort, by PHONE: draft/manual/POS orders can carry no
+  // checkout_id/token AND no matchable contact — without this, the person
+  // who just paid keeps getting "you left something behind".
+  const orderPhone = extractShopifyPhone(payload)
+  if (orderPhone) {
+    const { data: actives } = await db
+      .from('checkout_recoveries')
+      .select('id, phone')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .limit(500)
+    const hits = (actives ?? []).filter((r: any) => phonesMatch(r.phone, orderPhone))
+    for (const r of hits) {
+      await db.from('checkout_recoveries').update({ status: 'completed_order' }).eq('id', r.id)
+    }
   }
 }

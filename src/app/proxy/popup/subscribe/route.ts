@@ -129,9 +129,18 @@ export async function POST(request: Request) {
     })
     .eq('id', contact.id)
 
-  // A fresh, explicit opt-in outranks an old STOP — the consent_events row
-  // above is the audit trail for this deletion.
-  await db.from('suppression_list').delete().eq('user_id', userId).eq('phone', phone)
+  // A fresh opt-in after a STOP does NOT silently reopen marketing. The
+  // suppression row STAYS — a past STOP is the strongest block/report
+  // predictor there is, and that risk lands on the number's quality rating
+  // — it only gets stamped, so the merchant can review "re-consented after
+  // STOP" in Settings and clear it by hand. The recovery/broadcast gates
+  // keep blocking until then. The code + welcome message below still go
+  // out: the customer explicitly asked for those.
+  await db
+    .from('suppression_list')
+    .update({ re_opted_in_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .eq('phone', phone)
 
   // Submit counted the moment consent is saved — send failures below don't
   // un-count a real signup.

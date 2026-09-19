@@ -32,6 +32,26 @@ export const MAX_SEND_ATTEMPTS = 5
 export const DEFAULT_MAX_AGE_HOURS = 24
 
 /**
+ * The marketing allow-list gate.
+ *
+ * Recovery is opt-IN: a checkout phone was given for shipping, not
+ * marketing, so a send needs an explicit `opted_in` (the popup writes it) —
+ * AND no suppression row. The suppression check is deliberately blind to
+ * re_opted_in_at: a number that once said STOP stays blocked, even after a
+ * popup re-consent, until the merchant clears the row by hand in Settings.
+ * A past STOP is the strongest block/report predictor Meta quality has.
+ */
+export function marketingAllowed(
+  optInStatus: string | null | undefined,
+  phone: string | null | undefined,
+  suppressedPhones: Array<string | null>
+): boolean {
+  if (optInStatus !== 'opted_in') return false
+  if (!phone) return false
+  return !suppressedPhones.some((p) => phonesMatch(p, phone))
+}
+
+/**
  * When the CART was abandoned — the moment every reminder delay is measured
  * from. The tracking row's own created_at is only a last resort: a backfill
  * creates rows months after the fact, and measuring from row creation is what
@@ -121,9 +141,38 @@ export async function ensureCheckoutRecovery(db: any, userId: string, checkoutRo
 
   const phone = checkoutRow.customer_phone
 
+  // ---- consent gate, at INTAKE ----
+  // Computed up front because BOTH branches need it: new rows, and parked
+  // rows re-activating. No opt-in, no active sequence — the row still says
+  // WHY on the carts page instead of the cart silently vanishing.
+  let allowed = false
+  if (phone) {
+    const { data: contactRow } = checkoutRow.contact_id
+      ? await db.from('contacts').select('opt_in_status').eq('id', checkoutRow.contact_id).maybeSingle()
+      : { data: null }
+    const { data: suppressed } = await db
+      .from('suppression_list')
+      .select('phone')
+      .eq('user_id', userId)
+    allowed = marketingAllowed(
+      contactRow?.opt_in_status,
+      phone,
+      (suppressed ?? []).map((s: any) => s.phone)
+    )
+  }
+
   if (existing) {
-    // A phone that arrives later re-activates a row parked as skipped_no_phone.
+    // A phone that arrives later re-activates a row parked as
+    // skipped_no_phone — THROUGH the consent gate, never around it. And a
+    // row parked as skipped_no_consent comes alive if the customer has
+    // since opted in (abandon first, fill the popup after) — the sweep's
+    // freshness window still applies before anything is sent.
     if (existing.status === 'skipped_no_phone' && phone) {
+      await db
+        .from('checkout_recoveries')
+        .update({ status: allowed ? 'active' : 'skipped_no_consent', phone })
+        .eq('id', existing.id)
+    } else if (existing.status === 'skipped_no_consent' && allowed) {
       await db.from('checkout_recoveries').update({ status: 'active', phone }).eq('id', existing.id)
     }
     return
@@ -136,6 +185,18 @@ export async function ensureCheckoutRecovery(db: any, userId: string, checkoutRo
       checkout_row_id: checkoutRow.id,
       contact_id: checkoutRow.contact_id,
       status: 'skipped_no_phone',
+    })
+    return
+  }
+
+  if (!allowed) {
+    await db.from('checkout_recoveries').insert({
+      user_id: userId,
+      shopify_checkout_id: shopifyCheckoutId,
+      checkout_row_id: checkoutRow.id,
+      contact_id: checkoutRow.contact_id,
+      phone,
+      status: 'skipped_no_consent',
     })
     return
   }
@@ -225,6 +286,27 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
     const config = await getShopifyConfig(userId)
     if (!config?.recovery_enabled) continue
 
+    // ---- consent gate, at SEND ----
+    // Re-checked on every sweep, never trusted from intake: a STOP or an
+    // admin change between reminder 1 and 2 must stop reminder 2. One
+    // suppression fetch and one batched contact fetch per tenant, not per
+    // row.
+    const { data: suppressedRows } = await db
+      .from('suppression_list')
+      .select('phone')
+      .eq('user_id', userId)
+    const suppressedPhones = (suppressedRows ?? []).map((s: any) => s.phone)
+
+    const contactIds = [...new Set(userRows.map((r: any) => r.contact_id).filter(Boolean))]
+    const optInById = new Map<string, string | null>()
+    for (let i = 0; i < contactIds.length; i += 100) {
+      const { data: contacts } = await db
+        .from('contacts')
+        .select('id, opt_in_status')
+        .in('id', contactIds.slice(i, i + 100))
+      for (const c of contacts ?? []) optInById.set(c.id, c.opt_in_status)
+    }
+
     const delays = [
       config.recovery_delay1_minutes ?? 45,
       config.recovery_delay2_minutes ?? 1440,
@@ -239,6 +321,24 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
           // Defensive: an active row without a phone can never be sent, and
           // leaving it active means re-examining it on every single sweep.
           await db.from('checkout_recoveries').update({ status: 'skipped_no_phone' }).eq('id', row.id)
+          continue
+        }
+
+        if (
+          !marketingAllowed(
+            row.contact_id ? optInById.get(row.contact_id) : null,
+            row.phone,
+            suppressedPhones
+          )
+        ) {
+          await db
+            .from('checkout_recoveries')
+            .update({
+              status: 'skipped_no_consent',
+              last_error: 'No WhatsApp marketing opt-in, or the number is on the suppression list',
+            })
+            .eq('id', row.id)
+          stopped++
           continue
         }
 
@@ -356,7 +456,8 @@ export async function sendReminder(
   const vars = (map as any[]).map((entry) => {
     switch (entry.source) {
       case 'first_name':
-        return (checkout.customer_name ?? '').split(' ')[0] || 'hola'
+        // Locale-aware fallback: "Hi hola," was nobody's greeting.
+        return (checkout.customer_name ?? '').split(' ')[0] || (prefersSpanish ? 'cliente' : 'there')
       case 'full_name':
         return checkout.customer_name ?? ''
       case 'cart_total':
@@ -540,6 +641,9 @@ export async function handleRecoveryOptOut(ctx: InboundCtx): Promise<boolean> {
       reason: 'opt_out',
       keyword: matched,
       source: 'whatsapp',
+      // A NEW stop wipes any earlier popup re-consent stamp — the freshest
+      // signal wins, and it says stop.
+      re_opted_in_at: null,
     },
     { onConflict: 'user_id,phone' }
   )

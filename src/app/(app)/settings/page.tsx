@@ -382,6 +382,20 @@ function SettingsScreen() {
                   sub="These numbers never receive marketing, regardless of segment or campaign"
                 />
               </div>
+              {data.suppression.some((s: any) => s.re_opted_in_at) && (
+                <div
+                  className="mx-5 mb-3 rounded-lg px-3 py-2 text-[12.5px] leading-relaxed"
+                  style={{ background: 'var(--w-ambertint)', color: '#92400E' }}
+                >
+                  <b>
+                    {data.suppression.filter((s: any) => s.re_opted_in_at).length} re-consented after
+                    STOP
+                  </b>{' '}
+                  — these people filled the popup again, but stay blocked until you remove them here
+                  yourself. A number that once said STOP is the likeliest to block or report, which is
+                  what sinks the WhatsApp quality rating — review before clearing.
+                </div>
+              )}
               {data.suppression.length === 0 ? (
                 <div className="px-5 pb-5 text-[12.5px]" style={{ color: 'var(--w-muted)' }}>
                   Empty. Anyone who sends STOP, BAJA, PARAR or UNSUBSCRIBE lands here automatically.
@@ -402,6 +416,14 @@ function SettingsScreen() {
                       <tr key={s.id}>
                         <Td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
                           {formatPhone(s.phone)}
+                          {s.re_opted_in_at && (
+                            <span
+                              className="ml-2 rounded-full px-2 py-[2px] text-[10.5px] font-semibold"
+                              style={{ background: 'var(--w-ambertint)', color: '#B45309' }}
+                            >
+                              Re-consented {relTime(s.re_opted_in_at)}
+                            </span>
+                          )}
                         </Td>
                         <Td>{s.reason}</Td>
                         <Td style={{ color: 'var(--w-muted)' }}>{s.keyword || '—'}</Td>
