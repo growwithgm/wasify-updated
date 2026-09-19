@@ -21,8 +21,10 @@
   overflow-y: auto;
   background: #fff;
   color: #111;
-  border-radius: 4px 4px 0 0;
-  padding: 30px 26px 24px;
+  /* Phone: bottom sheet with the design's 20px top corners; desktop swaps
+     to the 4px centered card below. */
+  border-radius: 20px 20px 0 0;
+  padding: 30px 24px 28px;
   box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.3);
   animation: wasify-popup-up 0.25s ease-out;
   font-family: inherit;
