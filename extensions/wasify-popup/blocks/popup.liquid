@@ -1,0 +1,35 @@
+{%- comment -%}
+  Wasify WhatsApp popup — app embed.
+
+  Deliberately EMPTY of content: no headings, no consent text, no rules.
+  The JS asks the Wasify config endpoint (through the App Proxy) what to
+  show and where — so the merchant's admin edits are live on the next page
+  load without touching the theme or redeploying this extension.
+
+  The only settings here are the ones Shopify forces us to carry in the
+  theme: the App Proxy subpath (must match the app's Proxy configuration).
+{%- endcomment -%}
+<div
+  id="wasify-popup-root"
+  data-proxy="{{ block.settings.proxy_path | default: '/apps/wasify' }}"
+  data-country="{{ localization.country.iso_code | default: 'ES' }}"
+  data-locale="{{ request.locale.iso_code | default: 'en' }}"
+></div>
+
+{% schema %}
+{
+  "name": "Wasify WhatsApp Popup",
+  "target": "body",
+  "javascript": "wasify-popup.js",
+  "stylesheet": "wasify-popup.css",
+  "settings": [
+    {
+      "type": "text",
+      "id": "proxy_path",
+      "label": "App proxy subpath",
+      "default": "/apps/wasify",
+      "info": "Must match the App Proxy configured for the Wasify app. Only change this if the proxy subpath changes."
+    }
+  ]
+}
+{% endschema %}

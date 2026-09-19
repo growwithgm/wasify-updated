@@ -1,0 +1,113 @@
+/* Wasify WhatsApp popup. Mobile-first: bottom sheet on phones, centered
+   card on desktop. 16px inputs so iOS never zoom-jumps the page. */
+
+.wasify-popup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.wasify-popup-card {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: #fff;
+  color: #111827;
+  border-radius: 16px 16px 0 0;
+  padding: 24px 20px 20px;
+  box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.25);
+  animation: wasify-popup-up 0.25s ease-out;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+@media (min-width: 560px) {
+  .wasify-popup-overlay { align-items: center; padding: 16px; }
+  .wasify-popup-card { border-radius: 16px; animation-name: wasify-popup-in; }
+}
+
+@keyframes wasify-popup-up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes wasify-popup-in { from { transform: scale(0.96); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .wasify-popup-card { animation: none; }
+}
+
+.wasify-popup-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: 0;
+  background: none;
+  font-size: 26px;
+  line-height: 1;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 6px;
+}
+
+.wasify-popup-heading { font-size: 19px; font-weight: 700; line-height: 1.3; padding-right: 24px; }
+.wasify-popup-sub { margin-top: 6px; font-size: 13.5px; line-height: 1.5; color: #4b5563; }
+
+.wasify-popup-form { margin-top: 14px; }
+
+.wasify-popup-phone {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 16px; /* iOS: anything smaller triggers zoom */
+  padding: 11px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  outline: none;
+}
+.wasify-popup-phone:focus { border-color: #16a34a; }
+
+.wasify-popup-hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+.wasify-popup-consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #4b5563;
+  cursor: pointer;
+}
+.wasify-popup-consent input { margin-top: 2px; flex-shrink: 0; }
+
+.wasify-popup-btn {
+  width: 100%;
+  margin-top: 14px;
+  border: 0;
+  border-radius: 10px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px;
+  cursor: pointer;
+}
+.wasify-popup-btn:disabled { opacity: 0.5; cursor: default; }
+
+.wasify-popup-error { margin-top: 8px; font-size: 12.5px; color: #b91c1c; }
+.wasify-popup-disclaimer { margin-top: 10px; text-align: center; font-size: 11px; color: #9ca3af; }
+
+.wasify-popup-success { margin-top: 12px; font-size: 14.5px; line-height: 1.5; font-weight: 600; color: #15803d; }
+.wasify-popup-code {
+  margin-top: 10px;
+  text-align: center;
+  font-family: ui-monospace, monospace;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  background: #f0fdf4;
+  border: 1px dashed #16a34a;
+  border-radius: 10px;
+  padding: 10px;
+}

@@ -1499,6 +1499,23 @@ describe('popup consent capture', () => {
     expect(page).not.toContain('maxLength') // no length limits on any content field
   })
 
+  it('ships a theme app extension that carries no content of its own', () => {
+    // The extension only loads JS; every string the visitor sees comes from
+    // the config endpoint — so admin edits are live without a redeploy.
+    const liquid = readFileSync(join(process.cwd(), 'extensions/wasify-popup/blocks/popup.liquid'), 'utf8')
+    expect(liquid).toContain('"target": "body"') // app embed, toggled in the customizer
+    expect(liquid).toContain('data-proxy')
+    expect((liquid.match(/"type"/g) ?? []).length).toBe(1) // ONE forced setting: the proxy subpath
+
+    const js = readFileSync(join(process.cwd(), 'extensions/wasify-popup/assets/wasify-popup.js'), 'utf8')
+    expect(js).toContain('firstPartyMarketingAllowed') // privacy check…
+    expect(js).toContain('whenMarketingAllowed(fetchConfig)') // …BEFORE the config call
+    expect(js).toContain('visitorConsentCollected') // and a retry when consent arrives late
+    expect(js).toContain('textContent') // config strings render as data, never markup
+    expect(js).toContain('wasify_popup_done') // subscribed = never again
+    expect(js).toContain('wasify_popup_hide_until') // dismissed = wait N days, no network
+  })
+
   it('writes consent FIRST and enforces the checkbox server-side', () => {
     const route = readFileSync(join(process.cwd(), 'src/app/proxy/popup/subscribe/route.ts'), 'utf8')
     // Server-side consent enforcement, not just a disabled button.
