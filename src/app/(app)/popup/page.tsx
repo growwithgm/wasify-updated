@@ -642,16 +642,27 @@ function PopupScreen() {
                     {form.popup_success_text}
                   </div>
                 )}
-                <div className="mt-3.5 rounded-[3px] p-3" style={{ border: '1px dashed #4A4A48' }}>
-                  <div
-                    className="text-[16px] font-bold"
-                    style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.22em' }}
-                  >
-                    WELCOME10
+                <div
+                  className="mt-3.5 flex items-center gap-3 rounded-[3px] p-3 text-left"
+                  style={{ border: '1px dashed #4A4A48' }}
+                >
+                  <div className="min-w-0">
+                    <div
+                      className="text-[9.5px] font-semibold uppercase"
+                      style={{ color: '#8A8A88', letterSpacing: '0.18em' }}
+                    >
+                      Code
+                    </div>
+                    <div
+                      className="mt-1 text-[16px]"
+                      style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.18em' }}
+                    >
+                      WELCOME10
+                    </div>
                   </div>
                   <div
-                    className="mx-auto mt-2 inline-block rounded-[3px] px-3.5 py-1 text-[11px]"
-                    style={{ border: '1px solid #4A4A48' }}
+                    className="ml-auto shrink-0 rounded-[3px] px-3 py-1.5 text-[10px] font-semibold uppercase"
+                    style={{ border: '1px solid #6A6A68', letterSpacing: '0.14em' }}
                   >
                     Copy
                   </div>

@@ -288,13 +288,21 @@
       if (c.success) card.appendChild(el('div', 'wasify-popup-success', c.success));
 
       if (code) {
+        // Dashed box, design layout: "CODE" label + code on the left, the
+        // Copy button on the right. Copied ✓ reverts after a moment.
         var box = el('div', 'wasify-popup-codebox');
-        box.appendChild(el('div', 'wasify-popup-code', code));
+        var col = el('div', 'wasify-popup-codecol');
+        col.appendChild(el('div', 'wasify-popup-codelabel', 'Code'));
+        col.appendChild(el('div', 'wasify-popup-code', code));
+        box.appendChild(col);
         var copy = el('button', 'wasify-popup-copy', 'Copy');
         copy.type = 'button';
         copy.addEventListener('click', function () {
           try {
-            navigator.clipboard.writeText(code).then(function () { copy.textContent = '✓ Copied'; });
+            navigator.clipboard.writeText(code).then(function () {
+              copy.textContent = 'Copied ✓';
+              setTimeout(function () { copy.textContent = 'Copy'; }, 1800);
+            });
           } catch (e) {
             copy.textContent = code; // clipboard blocked → at least show it plainly
           }
