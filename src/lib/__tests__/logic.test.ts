@@ -14,6 +14,7 @@ import { validateNodes } from '@/app/api/flows/[id]/route'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { rowTagNames } from '@/app/api/contacts/import/route'
 import { prepareRows, phoneKey, phoneIndex, backfillPatch, chunk } from '@/lib/contacts-import'
+import { normalizePath, matchesRule, pageAllowed, popupBlockReason, popupPublicConfig } from '@/lib/engines/popup'
 import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
 import { graphqlTopic, restTopic } from '@/lib/shopify/webhooks'
@@ -1419,6 +1420,98 @@ describe('bulk CSV import', () => {
     expect(route).toContain('replace_tags')
     // The delete must stay scoped to the tenant and to re-tagged contacts.
     expect(route).toMatch(/\.delete\(\)\s*\.eq\('user_id', userId\)\s*\.in\('contact_id', part\)/)
+  })
+})
+
+describe('popup consent capture', () => {
+  it('normalizes paths so rules and reality meet in the middle', () => {
+    expect(normalizePath('/Collections/Sale/?utm=x#top')).toBe('/collections/sale')
+    expect(normalizePath('collections/sale')).toBe('/collections/sale')
+    expect(normalizePath('https://ibban.com/pages/contact')).toBe('/pages/contact')
+    expect(normalizePath('')).toBe('/')
+    expect(normalizePath('/')).toBe('/')
+  })
+
+  it('matches wildcard rules, exact rules, and the bare star', () => {
+    expect(matchesRule('/collections/sale', '/collections/*')).toBe(true)
+    expect(matchesRule('/collections', '/collections/*')).toBe(false) // no trailing segment
+    expect(matchesRule('/pages/contact', '/pages/contact')).toBe(true)
+    expect(matchesRule('/pages/contact-us', '/pages/contact')).toBe(false)
+    expect(matchesRule('/anything/at/all', '*')).toBe(true)
+    expect(matchesRule('/', '/')).toBe(true) // root rule is exact, not everywhere
+    expect(matchesRule('/products/x', '/')).toBe(false)
+    expect(matchesRule('/checkouts/c/abc', '/checkout*')).toBe(true)
+  })
+
+  it('lets exclude win over include, and empty include means everywhere', () => {
+    // The reported flash on cart/checkout is exactly what server-side
+    // targeting prevents: show:false means the popup never rendered.
+    const inc = ['*']
+    const exc = ['/cart*', '/checkout*', '/checkouts*']
+    expect(pageAllowed('/products/dress', inc, exc)).toBe(true)
+    expect(pageAllowed('/cart', inc, exc)).toBe(false)
+    expect(pageAllowed('/checkouts/c/123', inc, exc)).toBe(false)
+    expect(pageAllowed('/products/dress', [], exc)).toBe(true) // empty include = all
+    expect(pageAllowed('/products/dress', ['/collections/*'], [])).toBe(false) // include list narrows
+    expect(pageAllowed('/collections/new', ['/collections/*'], ['/collections/hidden*'])).toBe(true)
+    expect(pageAllowed('/collections/hidden-x', ['/collections/*'], ['/collections/hidden*'])).toBe(false)
+  })
+
+  it('blocks going live without consent text, button text, or a delivery template', () => {
+    const ok = {
+      popup_enabled: true,
+      popup_consent_text: 'I agree…',
+      popup_button_text: 'Send',
+      popup_discount_id: null,
+      popup_template: '',
+    }
+    expect(popupBlockReason(ok)).toBeNull() // list-building without discount is fine
+    expect(popupBlockReason({ ...ok, popup_enabled: false })).toContain('off')
+    expect(popupBlockReason({ ...ok, popup_consent_text: '  ' })).toContain('Consent text')
+    expect(popupBlockReason({ ...ok, popup_button_text: '' })).toContain('Button')
+    expect(popupBlockReason({ ...ok, popup_discount_id: 'x' })).toContain('template')
+    expect(popupBlockReason({ ...ok, popup_discount_id: 'x', popup_template: 'welcome_code' })).toBeNull()
+  })
+
+  it('passes empty content fields through — the popup hides them, never breaks', () => {
+    const pub = popupPublicConfig(
+      { popup_heading: '', popup_subheading: null, popup_button_text: 'Go', popup_trigger: 'scroll', popup_trigger_value: 40, popup_dismiss_days: 7 },
+      null
+    )
+    expect(pub.content.heading).toBe('')
+    expect(pub.content.subheading).toBe('')
+    expect(pub.trigger).toEqual({ kind: 'scroll', value: 40 })
+    expect(pub.discount).toBeNull()
+    // Unknown trigger value degrades to the safe default, not a crash.
+    expect(popupPublicConfig({ popup_trigger: 'weird' }, null).trigger.kind).toBe('delay')
+  })
+
+  it('writes consent FIRST and enforces the checkbox server-side', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/proxy/popup/subscribe/route.ts'), 'utf8')
+    // Server-side consent enforcement, not just a disabled button.
+    expect(route).toContain('consent_checked !== true')
+    // The consent record is written before discount and send.
+    expect(route.indexOf("from('consent_events')")).toBeGreaterThan(0)
+    expect(route.indexOf("from('consent_events')")).toBeLessThan(route.indexOf('generateDiscountCodeForContact('))
+    expect(route.indexOf("from('consent_events')")).toBeLessThan(route.indexOf('sendTemplate('))
+    // The proof fields of the record.
+    for (const field of ['consent_text', 'page_url', 'ip', 'phone']) expect(route).toContain(field)
+    // Fresh explicit opt-in clears an old STOP, with the event as audit trail.
+    expect(route).toContain("from('suppression_list').delete()")
+    // Both proxy endpoints verify the Shopify signature and fail closed.
+    const cfg = readFileSync(join(process.cwd(), 'src/app/proxy/popup/config/route.ts'), 'utf8')
+    for (const src of [route, cfg]) {
+      expect(src).toContain('verifyProxySignature')
+      expect(src).toContain('503')
+    }
+    // Page targeting decided on the server; impressions logged there too.
+    expect(cfg).toContain('pageAllowed')
+    expect(cfg).toContain("event: 'impression'")
+
+    const schema = readFileSync(join(process.cwd(), 'supabase/schema.sql'), 'utf8')
+    for (const col of ['popup_consent_text', 'popup_include_paths', 'popup_events', 'consent_text']) {
+      expect(schema).toContain(col)
+    }
   })
 })
 

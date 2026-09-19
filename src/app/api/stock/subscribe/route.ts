@@ -4,6 +4,7 @@ import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { makeCode, toMetaPhone } from '@/lib/flow/order-confirmation'
 import { variantLabel, pushKlaviyoProfile, originAllowed, rearmPatch } from '@/lib/flow/stock-alerts'
 import { upsertBisCustomer } from '@/lib/shopify/customers'
+import { makeRateLimiter, requestIp } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -42,31 +43,8 @@ export async function OPTIONS(request: Request) {
   return withCors(request, new NextResponse(null, { status: 204 }))
 }
 
-/**
- * 5 submits per IP per 10 minutes.
- *
- * In-memory, so each serverless instance counts separately and a cold start
- * resets it — acceptable, because it only needs to blunt bursts. The durable
- * guards are the honeypot and the unique constraint; a patient attacker
- * gains nothing but duplicate-key errors.
- */
-const RATE_WINDOW_MS = 10 * 60 * 1000
-const RATE_MAX = 5
-const hits = new Map<string, number[]>()
-
-function rateLimited(ip: string): boolean {
-  const now = Date.now()
-  const recent = (hits.get(ip) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
-  if (recent.length >= RATE_MAX) {
-    hits.set(ip, recent)
-    return true
-  }
-  recent.push(now)
-  hits.set(ip, recent)
-  // Bound the map so a wide botnet cannot balloon instance memory.
-  if (hits.size > 10_000) hits.clear()
-  return false
-}
+/** 5 submits per IP per 10 minutes — shared limiter, see lib/rate-limit. */
+const rateLimited = makeRateLimiter(5, 10 * 60 * 1000)
 
 export type SubscribeBody = {
   name?: string
@@ -226,11 +204,6 @@ export async function POST(request: Request) {
     return withCors(request, NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }))
   }
 
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    request.headers.get('x-real-ip') ||
-    'unknown'
-
-  const result = await processSubscribe(body, ip)
+  const result = await processSubscribe(body, requestIp(request))
   return withCors(request, NextResponse.json(result.payload, { status: result.status }))
 }

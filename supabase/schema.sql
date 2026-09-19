@@ -1108,7 +1108,7 @@ create table if not exists public.checkout_recoveries (
 
   status                text not null default 'active',
   -- active | done | completed_order | skipped_no_phone | suppressed_cooldown
-  -- | skipped_too_old | opted_out | failed
+  -- | skipped_too_old | skipped_no_consent | opted_out | failed
 
   reminders_sent        integer not null default 0,   -- 0..3
   reminder1_sent_at     timestamptz,
@@ -1513,6 +1513,58 @@ alter table public.shopify_config add column if not exists bis_template_en text 
 -- true  -> button carries the short /s/<code> (click tracked, app redirects)
 -- false -> button carries the product page's own path on the store's domain
 alter table public.shopify_config add column if not exists bis_track_clicks boolean not null default true;
+
+-- ============================================================================
+-- 17  POPUP / CONSENT CAPTURE
+-- ============================================================================
+-- The popup that builds the WhatsApp MARKETING opt-in list. Every content
+-- field lives HERE, not in the theme extension — the merchant edits it in
+-- the admin and it is live on the storefront on the next page load, with no
+-- theme change and no deploy. No length limits on purpose.
+alter table public.shopify_config add column if not exists popup_enabled boolean not null default false;
+-- Page rules: JSON arrays of path patterns with * wildcards. Exclude wins.
+alter table public.shopify_config add column if not exists popup_include_paths jsonb not null default '["*"]'::jsonb;
+alter table public.shopify_config add column if not exists popup_exclude_paths jsonb not null default '["/cart*", "/checkout*", "/checkouts*"]'::jsonb;
+alter table public.shopify_config add column if not exists popup_heading text not null default 'Get a discount on your first order';
+alter table public.shopify_config add column if not exists popup_subheading text not null default 'Join our WhatsApp list and we''ll send your code right away.';
+alter table public.shopify_config add column if not exists popup_button_text text not null default 'Send my code';
+alter table public.shopify_config add column if not exists popup_success_text text not null default 'Done! Check WhatsApp — your code is on the way.';
+-- The EXACT text next to the consent checkbox. Legally load-bearing: what
+-- the customer saw is copied into consent_events on every submit.
+alter table public.shopify_config add column if not exists popup_consent_text text not null default 'I agree to receive order updates and marketing messages from this store on WhatsApp. Reply STOP at any time to unsubscribe.';
+alter table public.shopify_config add column if not exists popup_disclaimer text not null default 'A few messages a month at most. No spam.';
+-- Trigger: 'delay' (value = seconds) | 'exit_intent' | 'scroll' (value = %)
+alter table public.shopify_config add column if not exists popup_trigger text not null default 'delay';
+alter table public.shopify_config add column if not exists popup_trigger_value integer not null default 5;
+-- After a dismiss, stay hidden this many days. After a subscribe: forever.
+alter table public.shopify_config add column if not exists popup_dismiss_days integer not null default 7;
+alter table public.shopify_config add column if not exists popup_discount_id uuid references public.discounts(id) on delete set null;
+-- WhatsApp template that carries the code. Contract: {{1}} = discount code
+-- (or a copy-code button, which gets the per-contact code as its coupon).
+alter table public.shopify_config add column if not exists popup_template text not null default '';
+
+-- Impressions/submits, one row per event — counts power the admin stats and
+-- a time series later. Written by the proxy endpoints (service role); RLS on
+-- with NO policy, same rule as stock_alerts.
+create table if not exists public.popup_events (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  event       text not null,               -- impression | submit
+  path        text,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists popup_events_idx on public.popup_events(user_id, event, created_at desc);
+
+alter table public.popup_events enable row level security;
+
+-- The consent RECORD the popup writes. contact_id/event/source existed;
+-- these carry the proof: the number, the exact text shown at that moment,
+-- where it happened, and from which IP.
+alter table public.consent_events add column if not exists phone text;
+alter table public.consent_events add column if not exists consent_text text;
+alter table public.consent_events add column if not exists page_url text;
+alter table public.consent_events add column if not exists ip text;
 
 -- audit_log is service-role only: RLS on, and no policy at all means
 -- authenticated clients can never read or write it.
