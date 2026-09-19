@@ -220,7 +220,7 @@ export async function ensureCheckoutRecovery(db: any, userId: string, checkoutRo
   }
 
   // Cooldown: don't chase the same person twice in N days.
-  const cooldownDays = config?.recovery_cooldown_days ?? 7
+  const cooldownDays = config?.recovery_cooldown_days ?? 14
 
   if (cooldownDays > 0) {
     const since = new Date(Date.now() - cooldownDays * 86400_000).toISOString()
@@ -309,7 +309,7 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
 
     const delays = [
       config.recovery_delay1_minutes ?? 45,
-      config.recovery_delay2_minutes ?? 1440,
+      config.recovery_delay2_minutes ?? 2160,
       config.recovery_delay3_minutes ?? 2880,
     ]
 

@@ -872,9 +872,9 @@ create table if not exists public.shopify_config (
   -- ---------------- Abandoned checkout recovery config ----------------
   recovery_enabled            boolean not null default false,
   recovery_delay1_minutes     integer not null default 45,
-  recovery_delay2_minutes     integer not null default 1440,
+  recovery_delay2_minutes     integer not null default 2160,
   recovery_delay3_minutes     integer not null default 2880,
-  recovery_cooldown_days      integer not null default 7,
+  recovery_cooldown_days      integer not null default 14,
   -- A recovery sequence only ever STARTS for a cart younger than this. The
   -- guard that stops a backfill from messaging months-old checkouts: their
   -- tracking rows are created for history, but marked skipped_too_old.
@@ -1149,7 +1149,7 @@ create table if not exists public.discounts (
   percentage       numeric(5,2),
   amount           numeric(12,2),
   currency         text not null default 'EUR',
-  expiry_days      integer not null default 7,
+  expiry_days      integer not null default 2,
   min_order_amount numeric(12,2),
   enabled          boolean not null default true,
   created_at       timestamptz not null default now(),

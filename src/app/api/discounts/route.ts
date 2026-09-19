@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       discount_type: body.discount_type ?? 'percentage',
       percentage: body.discount_type === 'fixed_amount' ? null : Number(body.percentage ?? 10),
       amount: body.discount_type === 'fixed_amount' ? Number(body.amount ?? 0) : null,
-      expiry_days: Number(body.expiry_days ?? 7),
+      expiry_days: Number(body.expiry_days ?? 2),
       min_order_amount: body.min_order_amount ? Number(body.min_order_amount) : null,
       enabled: body.enabled ?? true,
     }

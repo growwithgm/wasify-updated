@@ -29,3 +29,19 @@ where r.status = 'active'
         and s.phone = r.phone
     )
   );
+
+-- ============================================================================
+-- GO-LIVE VALUES for the EXISTING store row(s).
+-- schema.sql only changes DEFAULTS (new tenants); rows that already exist
+-- keep their old values, so this brings yours in line:
+--   reminder 2 at 36h, cooldown 14 days, discount codes valid 2 days.
+-- Reminder 3 is NOT touched here — clear its template in the UI if you want
+-- a 2-touch ladder (deliberately not enforced in code).
+-- ============================================================================
+
+update public.shopify_config
+set recovery_delay2_minutes = 2160,
+    recovery_cooldown_days  = 14;
+
+update public.discounts
+set expiry_days = 2;
