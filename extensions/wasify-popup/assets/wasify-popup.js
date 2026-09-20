@@ -337,7 +337,9 @@
 
     form.addEventListener('submit', function (e) {
       e.preventDefault();
+      var btnLabel = btn.textContent;
       btn.disabled = true;
+      btn.textContent = '…'; // universal "working" — no language to get wrong
       err.textContent = '';
 
       fetch(PROXY + '/popup/subscribe', {
@@ -359,6 +361,7 @@
         .then(function (res) {
           if (!res.ok) {
             err.textContent = (res.j && res.j.error) || 'Something went wrong — please try again.';
+            btn.textContent = btnLabel;
             refresh();
             return;
           }
@@ -366,6 +369,7 @@
         })
         .catch(function () {
           err.textContent = 'Network error — please try again.';
+          btn.textContent = btnLabel;
           refresh();
         });
     });

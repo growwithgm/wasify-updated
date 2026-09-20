@@ -1496,6 +1496,9 @@ describe('popup consent capture', () => {
     expect(route).toContain("sub_type: 'copy_code'")
     // A template that needs a code cannot send without one.
     expect(route).toContain('needsCode')
+    // The visitor never waits for Shopify/WhatsApp: sends run after the
+    // response, so the success screen is on-screen in well under a second.
+    expect(route).toContain('after(')
 
     const allow = readFileSync(join(process.cwd(), 'src/app/api/settings/shopify/route.ts'), 'utf8')
     expect(allow).toContain('popup_code_mode')

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { verifyProxySignature } from '@/lib/flow/stock-alerts'
@@ -120,58 +120,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Could not record consent: ${consentError.message}` }, { status: 500 })
   }
 
-  /* 3 — opt-in state + explicit re-opt-in clears an old suppression */
-  await db
-    .from('contacts')
-    .update({
-      opt_in_status: 'opted_in',
-      opt_in_at: new Date().toISOString(),
-      opt_in_source: 'popup',
-      accepts_marketing: true,
-    })
-    .eq('id', contact.id)
-
-  // A fresh opt-in after a STOP does NOT silently reopen marketing. The
-  // suppression row STAYS — a past STOP is the strongest block/report
-  // predictor there is, and that risk lands on the number's quality rating
-  // — it only gets stamped, so the merchant can review "re-consented after
-  // STOP" in Settings and clear it by hand. The recovery/broadcast gates
-  // keep blocking until then. The code + welcome message below still go
-  // out: the customer explicitly asked for those.
-  await db
-    .from('suppression_list')
-    .update({ re_opted_in_at: new Date().toISOString() })
-    .eq('user_id', userId)
-    .eq('phone', phone)
-
-  // Submit counted the moment consent is saved — send failures below don't
-  // un-count a real signup.
-  await db.from('popup_events').insert({ user_id: userId, event: 'submit', path: body.path ?? null })
-
-  /* 3.5 — mirror into Shopify NOW (tag: wasify-popup), queue on failure */
-  // Tags only — Wasify holds WHATSAPP consent, so Shopify's email/SMS
-  // marketing consent fields are never touched (upsertShopifyCustomer
-  // enforces that). A failure never blocks the signup: it goes to the retry
-  // queue and the 15-minute tick keeps trying.
-  try {
-    const push = await upsertShopifyCustomer(shop, {
-      phone,
-      name: (body.name ?? '').trim() || null,
-      tags: ['wasify-popup'],
-    })
-    if (!push.ok) {
-      await queueShopifyPush(db, {
-        userId,
-        shop,
-        phone,
-        name: (body.name ?? '').trim() || null,
-        tags: ['wasify-popup'],
+  /* 3 — opt-in state + re-opt-in stamp + submit count. Three independent
+     writes, fired together: one round-trip of latency instead of three.
+     A fresh opt-in after a STOP does NOT silently reopen marketing — the
+     suppression row STAYS and only gets stamped, so the merchant reviews
+     "re-consented after STOP" in Settings and clears it by hand; the
+     recovery/broadcast gates keep blocking until then. The code + welcome
+     message below still go out: the customer explicitly asked for those.
+     The submit is counted the moment consent is saved — a send failure
+     later doesn't un-count a real signup. */
+  await Promise.all([
+    db
+      .from('contacts')
+      .update({
+        opt_in_status: 'opted_in',
+        opt_in_at: new Date().toISOString(),
+        opt_in_source: 'popup',
+        accepts_marketing: true,
       })
-    }
-  } catch (e) {
-    console.error('[popup] shopify push failed', e)
-    await queueShopifyPush(db, { userId, shop, phone, name: (body.name ?? '').trim() || null, tags: ['wasify-popup'] })
-  }
+      .eq('id', contact.id),
+    db
+      .from('suppression_list')
+      .update({ re_opted_in_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('phone', phone),
+    db.from('popup_events').insert({ user_id: userId, event: 'submit', path: body.path ?? null }),
+  ])
 
   /* 4 — the discount code (optional). ONE source feeds everything below:
      'fixed' sends the merchant's own code as-is to every subscriber;
@@ -193,94 +167,117 @@ export async function POST(request: Request) {
     }
   }
 
-  /* 5 — WhatsApp send (optional: only when a template is configured) */
-  if ((config.popup_template ?? '').trim()) {
-    const tpl = await resolveApprovedTemplate(userId, config.popup_template)
-    if (!tpl) {
-      return NextResponse.json(
-        { error: 'You are subscribed, but the welcome message could not be sent' },
-        { status: 502 }
-      )
-    }
-
-    const shape = templateShape(tpl.components)
-    // Every code slot the template carries — body {{1}}, copy-code button,
-    // dynamic-URL button — is fed from the SAME code. A template that needs
-    // a code while none is configured cannot send.
-    const needsCode =
-      shape.bodyVars === 1 || shape.copyCodeButtons.length > 0 || shape.dynamicUrlButtons.length > 0
-    if (shape.bodyVars > 1 || (needsCode && !code)) {
-      // Misconfigured template — subscription stands, message cannot.
-      return NextResponse.json(
-        { error: 'You are subscribed, but the welcome message could not be sent' },
-        { status: 502 }
-      )
-    }
-
-    const components: any[] = []
-    if (shape.bodyVars === 1 && code) {
-      components.push({ type: 'body', parameters: [{ type: 'text', text: code }] })
-    }
-    // The coupon button carries the PER-CONTACT code — supplied explicitly,
-    // so sendTemplate's auto-fill (the template's sample code) stays out.
-    for (const index of shape.copyCodeButtons) {
-      if (code) {
-        components.push({
-          type: 'button',
-          sub_type: 'copy_code',
-          index: String(index),
-          parameters: [{ type: 'coupon_code', coupon_code: code }],
-        })
-      }
-    }
-    // A dynamic-URL button (…/discount/{{1}}) gets the code as its suffix —
-    // Shopify's /discount/CODE link then applies it at checkout by itself.
-    for (const index of shape.dynamicUrlButtons) {
-      if (code) {
-        components.push({
-          type: 'button',
-          sub_type: 'url',
-          index: String(index),
-          parameters: [{ type: 'text', text: code }],
-        })
-      }
-    }
-
-    const res = await sendTemplate(userId, phone, tpl.name, components.length ? components : undefined)
-    if (!res.ok) {
-      console.error('[popup] send failed', explainMetaError(res.error, res.code))
-      return NextResponse.json(
-        { error: 'You are subscribed, but the WhatsApp message failed to send' },
-        { status: 502 }
-      )
-    }
-
-    // Mirror into the inbox thread, like every other outbound.
+  /* 5 — everything the visitor does NOT need to wait for. The success
+     screen already shows the code; the Shopify push, the WhatsApp welcome
+     and the activity log run AFTER the response. A failure here can't be
+     acted on by the visitor anyway — it lands in the activity feed for the
+     merchant instead of a 502 that arrives seconds late. */
+  after(async () => {
+    // Shopify mirror (tag: wasify-popup), retry queue on failure. Tags only
+    // — Wasify holds WHATSAPP consent, so Shopify's email/SMS marketing
+    // consent fields are never touched (upsertShopifyCustomer enforces it).
     try {
-      const conversationId = await findOrCreateConversation(db, userId, contact.id)
-      if (conversationId) {
-        await db.from('messages').insert({
-          user_id: userId,
-          conversation_id: conversationId,
-          contact_id: contact.id,
-          sender_type: 'bot',
-          content_type: 'template',
-          content: code ? `Popup welcome — code ${code}` : 'Popup welcome message',
-          template_name: tpl.name,
-          message_id: res.wamid ?? null,
-          status: 'sent',
+      const push = await upsertShopifyCustomer(shop, {
+        phone,
+        name: (body.name ?? '').trim() || null,
+        tags: ['wasify-popup'],
+      })
+      if (!push.ok) {
+        await queueShopifyPush(db, {
+          userId,
+          shop,
+          phone,
+          name: (body.name ?? '').trim() || null,
+          tags: ['wasify-popup'],
         })
       }
     } catch (e) {
-      console.error('[popup] mirror failed', e)
+      console.error('[popup] shopify push failed', e)
+      await queueShopifyPush(db, { userId, shop, phone, name: (body.name ?? '').trim() || null, tags: ['wasify-popup'] })
     }
-  }
 
-  await logActivity(db, userId, {
-    kind: 'system',
-    title: 'Popup signup — WhatsApp marketing opt-in',
-    detail: code ? `code ${code}` : undefined,
-    contactId: contact.id,
+    // The WhatsApp welcome (optional: only when a template is configured).
+    let sendFailure: string | null = null
+    if ((config.popup_template ?? '').trim()) {
+      const tpl = await resolveApprovedTemplate(userId, config.popup_template)
+      const shape = tpl ? templateShape(tpl.components) : null
+      // Every code slot the template carries — body {{1}}, copy-code button,
+      // dynamic-URL button — is fed from the SAME code. A template that
+      // needs a code while none is configured cannot send.
+      const needsCode = shape
+        ? shape.bodyVars === 1 || shape.copyCodeButtons.length > 0 || shape.dynamicUrlButtons.length > 0
+        : false
+      if (!tpl || !shape) {
+        sendFailure = `template "${config.popup_template}" is not approved/synced`
+      } else if (shape.bodyVars > 1 || (needsCode && !code)) {
+        sendFailure = `template "${tpl.name}" needs a code/variables the popup does not have`
+      } else {
+        const components: any[] = []
+        if (shape.bodyVars === 1 && code) {
+          components.push({ type: 'body', parameters: [{ type: 'text', text: code }] })
+        }
+        // The coupon button carries the code explicitly, so sendTemplate's
+        // auto-fill (the template's sample code) stays out.
+        for (const index of shape.copyCodeButtons) {
+          if (code) {
+            components.push({
+              type: 'button',
+              sub_type: 'copy_code',
+              index: String(index),
+              parameters: [{ type: 'coupon_code', coupon_code: code }],
+            })
+          }
+        }
+        // A dynamic-URL button (…/discount/{{1}}) gets the code as its
+        // suffix — Shopify's /discount/CODE link then applies it at
+        // checkout by itself.
+        for (const index of shape.dynamicUrlButtons) {
+          if (code) {
+            components.push({
+              type: 'button',
+              sub_type: 'url',
+              index: String(index),
+              parameters: [{ type: 'text', text: code }],
+            })
+          }
+        }
+
+        const res = await sendTemplate(userId, phone, tpl.name, components.length ? components : undefined)
+        if (!res.ok) {
+          sendFailure = explainMetaError(res.error, res.code)
+        } else {
+          // Mirror into the inbox thread, like every other outbound.
+          try {
+            const conversationId = await findOrCreateConversation(db, userId, contact.id)
+            if (conversationId) {
+              await db.from('messages').insert({
+                user_id: userId,
+                conversation_id: conversationId,
+                contact_id: contact.id,
+                sender_type: 'bot',
+                content_type: 'template',
+                content: code ? `Popup welcome — code ${code}` : 'Popup welcome message',
+                template_name: tpl.name,
+                message_id: res.wamid ?? null,
+                status: 'sent',
+              })
+            }
+          } catch (e) {
+            console.error('[popup] mirror failed', e)
+          }
+        }
+      }
+      if (sendFailure) console.error('[popup] send failed', sendFailure)
+    }
+
+    await logActivity(db, userId, {
+      kind: 'system',
+      title: sendFailure
+        ? 'Popup signup — welcome message FAILED'
+        : 'Popup signup — WhatsApp marketing opt-in',
+      detail: [code ? `code ${code}` : null, sendFailure].filter(Boolean).join(' — ') || undefined,
+      contactId: contact.id,
+    })
   })
 
   return NextResponse.json({ ok: true, code })
