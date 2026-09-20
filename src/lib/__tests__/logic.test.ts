@@ -1667,6 +1667,9 @@ describe('popup consent capture', () => {
     expect(js).toContain('navigator.clipboard')
     expect(js).toContain('success_note')
     expect(js).toContain('success_button')
+    // Continue Shopping walks through Shopify's /discount/CODE URL, so the
+    // code is already applied when the customer reaches checkout.
+    expect(js).toContain("'/discount/' + encodeURIComponent(code)")
     const css = readFileSync(join(process.cwd(), 'extensions/wasify-popup/assets/wasify-popup.css'), 'utf8')
     expect(css).toContain('.wasify-popup-card--dark')
     expect(css).toContain('#0a0a0a')

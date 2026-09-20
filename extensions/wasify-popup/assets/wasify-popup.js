@@ -256,7 +256,11 @@
     phone.addEventListener('input', refresh);
     if (consentBox) consentBox.addEventListener('change', refresh);
 
+    var succeeded = false;
     function dismiss() {
+      // After a successful signup a close is just a close — no hide window,
+      // no teaser invite back to a form they already submitted.
+      if (succeeded) { overlay.remove(); return; }
       var days = (cfg.frequency && cfg.frequency.dismiss_days) || 7;
       lsSet(KEY_HIDE, String(Date.now() + days * 86400000));
       overlay.remove();
@@ -279,6 +283,7 @@
 
     function showSuccess(code) {
       lsSet(KEY_DONE, '1');
+      succeeded = true;
       hideTeaser();
       form.remove();
       card.classList.add('wasify-popup-card--dark');
@@ -315,7 +320,17 @@
       if (c.success_button) {
         var done = el('button', 'wasify-popup-continue', c.success_button);
         done.type = 'button';
-        done.addEventListener('click', function () { overlay.remove(); });
+        done.addEventListener('click', function () {
+          if (code) {
+            // Shopify's own discount URL: one round-trip that pins the code
+            // to the cart, then straight back to this page — at checkout the
+            // discount is already applied, nothing to type.
+            window.location.href = '/discount/' + encodeURIComponent(code) +
+              '?redirect=' + encodeURIComponent(location.pathname + location.search);
+          } else {
+            overlay.remove();
+          }
+        });
         card.appendChild(done);
       }
     }
