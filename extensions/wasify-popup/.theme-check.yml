@@ -1,0 +1,6 @@
+# The popup runtime is one self-contained file — no framework, no
+# dependencies — and its comments are part of the deliverable. Raise the
+# app-block JS size lint (default 10 KB) so `shopify app deploy` stops
+# flagging it; the asset itself is small either way.
+AssetSizeAppBlockJavaScript:
+  threshold_in_bytes: 25600
