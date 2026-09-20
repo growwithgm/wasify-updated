@@ -1773,21 +1773,22 @@ describe('popup consent capture', () => {
 })
 
 describe('recovery consent gate', () => {
-  it('allows only an explicit opt-in with no suppression row', () => {
-    // Opt-IN model: a checkout phone was given for shipping, not marketing.
+  it('blocks only opt-outs and suppressed numbers — the opt-in rule is the POPUP\'s', () => {
+    // BLOCK-list model, the merchant's explicit decision: an abandoned
+    // checkout gets its reminders unless the person actually said no.
     expect(marketingAllowed('opted_in', '34600111222', [])).toBe(true)
-    expect(marketingAllowed('unknown', '34600111222', [])).toBe(false)
+    expect(marketingAllowed('unknown', '34600111222', [])).toBe(true)
+    expect(marketingAllowed(null, '34600111222', [])).toBe(true)
     expect(marketingAllowed('opted_out', '34600111222', [])).toBe(false)
-    expect(marketingAllowed(null, '34600111222', [])).toBe(false)
-    expect(marketingAllowed('opted_in', null, [])).toBe(false)
+    expect(marketingAllowed('opted_in', null, [])).toBe(false) // no phone, nothing to send to
   })
 
   it('keeps a re-consented-after-STOP number blocked until the merchant clears it', () => {
-    // The suppression row outranks opt_in_status='opted_in' — a past STOP
-    // is the strongest block/report predictor Meta quality has. Only the
-    // merchant deleting the row (Settings) reopens marketing.
+    // The suppression row outranks everything — a past STOP is the
+    // strongest block/report predictor Meta quality has. Only the merchant
+    // deleting the row (Settings) reopens marketing.
     expect(marketingAllowed('opted_in', '34600111222', ['34600111222'])).toBe(false)
-    expect(marketingAllowed('opted_in', '600111222', ['34600111222'])).toBe(false) // last-8 match
+    expect(marketingAllowed(null, '600111222', ['34600111222'])).toBe(false) // last-8 match
     expect(marketingAllowed('opted_in', '34600111222', ['34999888777'])).toBe(true)
   })
 

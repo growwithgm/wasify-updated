@@ -32,22 +32,22 @@ export const MAX_SEND_ATTEMPTS = 5
 export const DEFAULT_MAX_AGE_HOURS = 24
 
 /**
- * The marketing allow-list gate.
- *
- * Recovery is opt-IN: a checkout phone was given for shipping, not
- * marketing, so a send needs an explicit `opted_in` (the popup writes it) —
- * AND no suppression row. The suppression check is deliberately blind to
- * re_opted_in_at: a number that once said STOP stays blocked, even after a
- * popup re-consent, until the merchant clears the row by hand in Settings.
- * A past STOP is the strongest block/report predictor Meta quality has.
+ * The recovery gate — a BLOCK list, by the merchant's explicit decision:
+ * the popup's opt-in requirement governs the POPUP only, and an abandoned
+ * checkout gets its reminders unless the person is actually blocked.
+ * Blocked means: no phone, explicitly opted OUT, or on the suppression
+ * list. The suppression check is deliberately blind to re_opted_in_at: a
+ * number that once said STOP stays blocked, even after a popup re-consent,
+ * until the merchant clears the row by hand in Settings. A past STOP is
+ * the strongest block/report predictor Meta quality has.
  */
 export function marketingAllowed(
   optInStatus: string | null | undefined,
   phone: string | null | undefined,
   suppressedPhones: Array<string | null>
 ): boolean {
-  if (optInStatus !== 'opted_in') return false
   if (!phone) return false
+  if (optInStatus === 'opted_out') return false
   return !suppressedPhones.some((p) => phonesMatch(p, phone))
 }
 
@@ -335,7 +335,7 @@ export async function runRecoveryTimers(db: any): Promise<{ sent: number; stoppe
             .from('checkout_recoveries')
             .update({
               status: 'skipped_no_consent',
-              last_error: 'No WhatsApp marketing opt-in, or the number is on the suppression list',
+              last_error: 'Opted out of WhatsApp, or the number is on the suppression list',
             })
             .eq('id', row.id)
           stopped++

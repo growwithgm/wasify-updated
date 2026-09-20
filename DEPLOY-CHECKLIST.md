@@ -116,13 +116,14 @@ mein wahi likhein.)
    `wasify-popup` tag ke sath ho. (Protected Customer Data approval
    pending ho to row `shopify_push_queue` mein hogi — approval ke baad
    tick khud push kar dega; yeh fail nahi, intezar hai.)
-7. **Gate ROKTA hai (sab se aham):** kisi DOOSRE number se (opted-in
-   nahi) checkout shuru kar ke chhorein → Abandoned carts per row
-   "No marketing opt-in" ke sath aaye, aur 45+ min tak koi message NA
-   jaye.
-8. **Gate KHOLTA hai:** step-5 wale opted-in number se checkout
-   chhorein → 45 min baad reminder 1 aaye (button mein cart link +
-   `?discount=CODE`).
+7. **Recovery SAB ko jati hai:** kisi bhi number se (opt-in ke
+   baghair) checkout shuru kar ke chhorein → 45 min baad reminder 1
+   aaye (button mein cart link + `?discount=CODE`). Opt-in ki shart
+   sirf POPUP ki hai, recovery ki nahi.
+8. **Gate sirf block-list per ROKTA hai:** jis number ne STOP bheja
+   ho (ya Settings → Suppression list mein ho) us se checkout
+   chhorein → Abandoned carts per "Opted out / suppressed" dikhe aur
+   koi message NA jaye.
 9. **Logged-in skip:** KISI bhi Shopify customer account se login ho kar
    (naye browser mein) store kholen → popup NA aaye. Yeh new-customer
    offer hai — har login (B2B samet) ke liye popup band hai; logout
