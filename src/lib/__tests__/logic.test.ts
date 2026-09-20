@@ -15,6 +15,7 @@ import { normalizeShopDomain } from '@/app/api/shopify/connect/route'
 import { rowTagNames } from '@/app/api/contacts/import/route'
 import { prepareRows, phoneKey, phoneIndex, backfillPatch, chunk } from '@/lib/contacts-import'
 import { normalizePath, matchesRule, pageAllowed, popupBlockReason, popupPublicConfig, stripLocalePrefix, triggerSatisfied, deviceAllowed, isMobileUA, DEFAULT_INCLUDE_PATHS, DEFAULT_EXCLUDE_PATHS } from '@/lib/engines/popup'
+import { classifySend, SYSTEM_LABELS } from '@/lib/engines/timeline'
 import { pruneOldRows } from '@/lib/retention'
 import { recoveryLabel } from '@/app/(app)/carts/page'
 import { numericId, orderNodeToPayload, checkoutNodeToPayload } from '@/lib/shopify/sync'
@@ -1517,6 +1518,50 @@ describe('popup consent capture', () => {
       expect(api).toContain(key)
     }
     expect(api).not.toContain('popup_trigger_value') // the pre-rework column, long gone
+  })
+
+  it('classifies every send by the prefix its engine already writes', () => {
+    // The timeline needs no new tables BECAUSE these prefixes are stable —
+    // this test is the contract that keeps them so.
+    expect(classifySend('Popup welcome — code IBBAN-ANNA-8F3K')).toEqual({ system: 'popup', detail: null })
+    expect(classifySend('Popup welcome message').system).toBe('popup')
+    expect(classifySend('Cart recovery reminder 2 — 54,00 €')).toEqual({ system: 'recovery', detail: 'R2' })
+    // Rows written before the stage joined the text still classify.
+    expect(classifySend('Cart recovery reminder — 54,00 €')).toEqual({ system: 'recovery', detail: null })
+    expect(classifySend('COD confirmation for order #1042').system).toBe('cod')
+    expect(classifySend('Back in stock — Summer dress / M').system).toBe('back_in_stock')
+    expect(classifySend('Order confirmation — #1042')).toEqual({ system: 'flow', detail: 'Order confirmation' })
+    expect(classifySend('anything else').system).toBe('flow')
+    expect(classifySend(null).system).toBe('flow')
+    // Every system has a label the page can print.
+    for (const key of ['popup', 'recovery', 'cod', 'back_in_stock', 'flow', 'broadcast']) {
+      expect(SYSTEM_LABELS[key as keyof typeof SYSTEM_LABELS]).toBeTruthy()
+    }
+    // …and the engines still write those exact prefixes.
+    expect(readFileSync(join(process.cwd(), 'src/lib/engines/recovery.ts'), 'utf8')).toContain(
+      'Cart recovery reminder ${stage}'
+    )
+    expect(readFileSync(join(process.cwd(), 'src/lib/engines/cod.ts'), 'utf8')).toContain('COD confirmation for order')
+    expect(readFileSync(join(process.cwd(), 'src/app/proxy/popup/subscribe/route.ts'), 'utf8')).toContain('Popup welcome')
+    expect(readFileSync(join(process.cwd(), 'src/app/api/flow/inventory-restock/route.ts'), 'utf8')).toContain('Back in stock —')
+  })
+
+  it('unions messages and broadcast_recipients into one timeline, no new tables', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/api/timeline/route.ts'), 'utf8')
+    expect(route).toContain("from('messages')")
+    expect(route).toContain("from('broadcast_recipients')")
+    expect(route).toContain("eq('sender_type', 'bot')") // outbound automation only
+    expect(route).toContain('classifySend')
+    // The contact drill-down answers "did the Shopify push happen?" from the
+    // queue: a row is pending/failed/done, NO row means the inline push
+    // reported ok.
+    expect(route).toContain("from('shopify_push_queue')")
+    expect(route).toContain("'direct'")
+    // The search resolves to contact ids first — never a giant .in() of raw
+    // phones, and commas/parens are stripped before the or() filter.
+    expect(route).toContain('replace(/[,()]/g')
+    // The page is in the nav.
+    expect(readFileSync(join(process.cwd(), 'src/components/shell/Sidebar.tsx'), 'utf8')).toContain("'/timeline'")
   })
 
   it('passes empty content fields through — the popup hides them, never breaks', () => {

@@ -515,7 +515,7 @@ export async function sendReminder(
   let linkage: { contactId?: string | null; conversationId?: string | null } = {}
 
   if (res.ok) {
-    linkage = await mirrorToThread(db, userId, row, checkout, templateName, res.wamid)
+    linkage = await mirrorToThread(db, userId, row, checkout, templateName, stage, res.wamid)
     await logActivity(db, userId, {
       kind: 'recovery',
       title: `Cart reminder ${stage} sent`,
@@ -562,6 +562,7 @@ async function mirrorToThread(
   row: any,
   checkout: any,
   templateName: string,
+  stage: number,
   wamid?: string
 ) {
   // A recovery row can predate its contact — a backfilled cart, or one
@@ -589,7 +590,8 @@ async function mirrorToThread(
     contact_id: contactId,
     sender_type: 'bot',
     content_type: 'template',
-    content: `Cart recovery reminder — ${formatMoney(checkout.total_price, checkout.currency)}`,
+    // The stage travels in the text — the timeline reads R1/R2/R3 from it.
+    content: `Cart recovery reminder ${stage} — ${formatMoney(checkout.total_price, checkout.currency)}`,
     template_name: templateName,
     message_id: wamid ?? null,
     status: wamid ? 'sent' : 'failed',

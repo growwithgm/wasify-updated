@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   IconAnalytics, IconBroadcasts, IconBell, IconCarts, IconCatalog, IconChatbot, IconChevronLeft, IconChevronRight,
-  IconContacts, IconDashboard, IconFlows, IconInbox, IconIntegrations, IconPipelines, IconPopup,
+  IconClock, IconContacts, IconDashboard, IconFlows, IconInbox, IconIntegrations, IconPipelines, IconPopup,
   IconSegments, IconSettings, IconTemplates, IconWhatsApp,
 } from '@/components/icons'
 
@@ -20,6 +20,7 @@ export const NAV_ITEMS = [
   { href: '/carts', label: 'Abandoned carts', Icon: IconCarts },
   { href: '/stock-alerts', label: 'Stock alerts', Icon: IconBell },
   { href: '/popup', label: 'Popup', Icon: IconPopup },
+  { href: '/timeline', label: 'Timeline', Icon: IconClock },
   { href: '/catalog', label: 'Catalog', Icon: IconCatalog },
   { href: '/pipelines', label: 'Pipelines', Icon: IconPipelines },
   { href: '/analytics', label: 'Analytics', Icon: IconAnalytics },
