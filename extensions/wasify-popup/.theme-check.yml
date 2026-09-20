@@ -4,3 +4,9 @@
 # flagging it; the asset itself is small either way.
 AssetSizeAppBlockJavaScript:
   threshold_in_bytes: 25600
+
+# ValidSchema only knows regular theme sections, so it flags the app-embed
+# keys (target / javascript / stylesheet) that Shopify's own deploy
+# validation accepts. False positives on the one schema this extension has.
+ValidSchema:
+  enabled: false
