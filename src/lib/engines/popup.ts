@@ -130,7 +130,15 @@ export function popupBlockReason(config: any): string | null {
   if (!config.popup_trigger_exit && !config.popup_trigger_delay && !config.popup_trigger_scroll) {
     return 'No trigger is enabled — with all three off the popup can never open.'
   }
-  if (config.popup_discount_id && !String(config.popup_template ?? '').trim()) {
+  if (config.popup_code_mode === 'fixed') {
+    if (!String(config.popup_fixed_code ?? '').trim()) {
+      return 'Code type is "one fixed code" but the code field is empty.'
+    }
+    if (!String(config.popup_template ?? '').trim()) {
+      return 'A discount code is set but no WhatsApp template is selected to deliver it.'
+    }
+  }
+  if (config.popup_code_mode !== 'fixed' && config.popup_discount_id && !String(config.popup_template ?? '').trim()) {
     return 'A discount is selected but no WhatsApp template is set to deliver the code.'
   }
   return null

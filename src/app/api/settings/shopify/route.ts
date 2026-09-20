@@ -37,7 +37,7 @@ const EDITABLE = [
   'popup_dismiss_days',
   'popup_teaser_enabled', 'popup_teaser_text', 'popup_teaser_position',
   'popup_devices',
-  'popup_discount_id', 'popup_template',
+  'popup_discount_id', 'popup_template', 'popup_code_mode', 'popup_fixed_code',
 ]
 
 export async function PATCH(request: Request) {

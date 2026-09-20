@@ -1569,6 +1569,12 @@ alter table public.shopify_config add column if not exists popup_discount_id uui
 -- WhatsApp template that carries the code. Contract: {{1}} = discount code
 -- (or a copy-code button, which gets the per-contact code as its coupon).
 alter table public.shopify_config add column if not exists popup_template text not null default '';
+-- ONE code source feeds everything — success screen, body {{1}}, copy-code
+-- and dynamic-URL buttons. 'unique' mints a per-customer single-use code
+-- from popup_discount_id; 'fixed' sends popup_fixed_code as-is to everyone
+-- (the merchant creates that code themselves in Shopify → Discounts).
+alter table public.shopify_config add column if not exists popup_code_mode text not null default 'unique';
+alter table public.shopify_config add column if not exists popup_fixed_code text not null default '';
 
 -- Impressions/submits, one row per event — counts power the admin stats and
 -- a time series later. Written by the proxy endpoints (service role); RLS on

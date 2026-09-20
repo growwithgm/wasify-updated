@@ -1474,6 +1474,46 @@ describe('popup consent capture', () => {
     expect(popupBlockReason({ ...ok, popup_trigger_delay: false })).toContain('trigger')
     expect(popupBlockReason({ ...ok, popup_discount_id: 'x' })).toContain('template')
     expect(popupBlockReason({ ...ok, popup_discount_id: 'x', popup_template: 'welcome_code' })).toBeNull()
+    // Fixed-code mode: the code field must be filled, and a template must
+    // deliver it — same contract as a selected discount.
+    expect(popupBlockReason({ ...ok, popup_code_mode: 'fixed' })).toContain('empty')
+    expect(popupBlockReason({ ...ok, popup_code_mode: 'fixed', popup_fixed_code: 'SAVE30' })).toContain('template')
+    expect(
+      popupBlockReason({ ...ok, popup_code_mode: 'fixed', popup_fixed_code: 'SAVE30', popup_template: 'welcome_code' })
+    ).toBeNull()
+  })
+
+  it('feeds ONE code into every slot the template has — body, coupon, URL button', () => {
+    const route = readFileSync(join(process.cwd(), 'src/app/proxy/popup/subscribe/route.ts'), 'utf8')
+    // Fixed mode sends the merchant's code as-is; unique mode mints one.
+    expect(route).toContain('popup_code_mode')
+    expect(route).toContain('popup_fixed_code')
+    expect(route).toContain('generateDiscountCodeForContact')
+    // A dynamic-URL button (…/discount/{{1}}) must get the code as its
+    // suffix, or Meta rejects the whole send per recipient.
+    expect(route).toContain('dynamicUrlButtons')
+    expect(route).toContain("sub_type: 'url'")
+    expect(route).toContain("sub_type: 'copy_code'")
+    // A template that needs a code cannot send without one.
+    expect(route).toContain('needsCode')
+
+    const allow = readFileSync(join(process.cwd(), 'src/app/api/settings/shopify/route.ts'), 'utf8')
+    expect(allow).toContain('popup_code_mode')
+    expect(allow).toContain('popup_fixed_code')
+    const schema = readFileSync(join(process.cwd(), 'supabase/schema.sql'), 'utf8')
+    expect(schema).toContain('popup_code_mode')
+    expect(schema).toContain('popup_fixed_code')
+
+    // The admin GET must return every field the page edits — a column
+    // missing here silently resets that setting on the next page load.
+    const api = readFileSync(join(process.cwd(), 'src/app/api/popup/route.ts'), 'utf8')
+    for (const key of [
+      'popup_strip_locale', 'popup_trigger_exit', 'popup_teaser_enabled', 'popup_devices',
+      'popup_success_note', 'popup_success_button', 'popup_code_mode', 'popup_fixed_code', 'store_name',
+    ]) {
+      expect(api).toContain(key)
+    }
+    expect(api).not.toContain('popup_trigger_value') // the pre-rework column, long gone
   })
 
   it('passes empty content fields through — the popup hides them, never breaks', () => {

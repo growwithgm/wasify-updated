@@ -20,7 +20,10 @@ export async function GET() {
       supabase
         .from('shopify_config')
         .select(
-          'popup_enabled, popup_include_paths, popup_exclude_paths, popup_heading, popup_subheading, popup_button_text, popup_success_text, popup_consent_text, popup_disclaimer, popup_trigger, popup_trigger_value, popup_dismiss_days, popup_discount_id, popup_template'
+          // store_name feeds the admin's example-code preview; the popup_*
+          // list must carry EVERY field the page edits, or saved values
+          // silently reset to defaults on the next page load.
+          'store_name, popup_enabled, popup_include_paths, popup_exclude_paths, popup_strip_locale, popup_heading, popup_subheading, popup_button_text, popup_success_text, popup_success_note, popup_success_button, popup_consent_text, popup_disclaimer, popup_trigger_exit, popup_trigger_delay, popup_trigger_delay_seconds, popup_trigger_scroll, popup_trigger_scroll_pct, popup_trigger_all, popup_dismiss_days, popup_teaser_enabled, popup_teaser_text, popup_teaser_position, popup_devices, popup_discount_id, popup_template, popup_code_mode, popup_fixed_code'
         )
         .maybeSingle(),
       supabase

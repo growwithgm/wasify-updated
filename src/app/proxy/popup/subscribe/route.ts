@@ -86,7 +86,7 @@ export async function POST(request: Request) {
 
   const { data: config } = await db
     .from('shopify_config')
-    .select('user_id, popup_consent_text, popup_discount_id, popup_template')
+    .select('user_id, popup_consent_text, popup_discount_id, popup_template, popup_code_mode, popup_fixed_code')
     .eq('store_domain', shop)
     .maybeSingle()
   if (!config) return NextResponse.json({ error: 'Unknown shop' }, { status: 400 })
@@ -173,9 +173,13 @@ export async function POST(request: Request) {
     await queueShopifyPush(db, { userId, shop, phone, name: (body.name ?? '').trim() || null, tags: ['wasify-popup'] })
   }
 
-  /* 4 — discount (optional) */
+  /* 4 — the discount code (optional). ONE source feeds everything below:
+     'fixed' sends the merchant's own code as-is to every subscriber;
+     'unique' (default) mints a per-contact single-use code in Shopify. */
   let code: string | null = null
-  if (config.popup_discount_id) {
+  if ((config.popup_code_mode ?? 'unique') === 'fixed') {
+    code = String(config.popup_fixed_code ?? '').trim() || null
+  } else if (config.popup_discount_id) {
     try {
       code = await generateDiscountCodeForContact(db, userId, config.popup_discount_id, contact.id)
     } catch (e: any) {
@@ -200,7 +204,12 @@ export async function POST(request: Request) {
     }
 
     const shape = templateShape(tpl.components)
-    if (shape.bodyVars > 1 || (shape.bodyVars === 1 && !code)) {
+    // Every code slot the template carries — body {{1}}, copy-code button,
+    // dynamic-URL button — is fed from the SAME code. A template that needs
+    // a code while none is configured cannot send.
+    const needsCode =
+      shape.bodyVars === 1 || shape.copyCodeButtons.length > 0 || shape.dynamicUrlButtons.length > 0
+    if (shape.bodyVars > 1 || (needsCode && !code)) {
       // Misconfigured template — subscription stands, message cannot.
       return NextResponse.json(
         { error: 'You are subscribed, but the welcome message could not be sent' },
@@ -221,6 +230,18 @@ export async function POST(request: Request) {
           sub_type: 'copy_code',
           index: String(index),
           parameters: [{ type: 'coupon_code', coupon_code: code }],
+        })
+      }
+    }
+    // A dynamic-URL button (…/discount/{{1}}) gets the code as its suffix —
+    // Shopify's /discount/CODE link then applies it at checkout by itself.
+    for (const index of shape.dynamicUrlButtons) {
+      if (code) {
+        components.push({
+          type: 'button',
+          sub_type: 'url',
+          index: String(index),
+          parameters: [{ type: 'text', text: code }],
         })
       }
     }

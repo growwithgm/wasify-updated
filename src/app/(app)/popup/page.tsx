@@ -62,6 +62,8 @@ const BLANK = {
   popup_devices: 'all',
   popup_discount_id: null as string | null,
   popup_template: '',
+  popup_code_mode: 'unique',
+  popup_fixed_code: '',
 }
 
 function PopupScreen() {
@@ -166,6 +168,19 @@ function PopupScreen() {
 
   const blockReason = popupBlockReason(form)
   const conversion = stats.impressions > 0 ? (stats.submits / stats.impressions) * 100 : 0
+
+  // ONE code feeds popup + message alike; this is what the admin previews.
+  // Unique mode can only show the FORMAT (codes are minted per signup).
+  const storePrefix =
+    String(form.store_name ?? '')
+      .normalize('NFD')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .toUpperCase()
+      .slice(0, 5) || 'SHOP'
+  const codeIsFixed = (form.popup_code_mode ?? 'unique') === 'fixed'
+  const fixedCode = String(form.popup_fixed_code ?? '').trim()
+  const selectedDiscount = discounts.find((d) => d.id === form.popup_discount_id)
+  const exampleCode = codeIsFixed ? fixedCode : selectedDiscount ? `${storePrefix}-ANNA-8F3K` : ''
 
   const includes = form.popup_include_paths ?? []
   const excludes = form.popup_exclude_paths ?? []
@@ -470,21 +485,18 @@ function PopupScreen() {
           </Card>
 
           <Card>
-            <CardTitle title="Discount & delivery" sub="The code is unique per contact, generated at signup, and sent on WhatsApp." />
+            <CardTitle
+              title="Discount & delivery"
+              sub="ONE code feeds everything at once: the success screen, the message body {{1}}, copy-code and link buttons all carry the same code."
+            />
             <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
               <Select
-                label="Discount"
-                value={form.popup_discount_id ?? ''}
-                onChange={(e) => set('popup_discount_id', e.target.value || null)}
+                label="Code type"
+                value={form.popup_code_mode ?? 'unique'}
+                onChange={(e) => set('popup_code_mode', e.target.value)}
               >
-                <option value="">No discount — list building only</option>
-                {discounts.filter((d) => d.enabled).map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.label} —{' '}
-                    {d.discount_type === 'fixed_amount' ? `${d.amount} ${d.currency}` : `${d.percentage}%`}, expires in{' '}
-                    {d.expiry_days}d
-                  </option>
-                ))}
+                <option value="unique">Unique code per customer (auto-created in Shopify)</option>
+                <option value="fixed">One fixed code for everyone</option>
               </Select>
               <Select label="WhatsApp template" value={form.popup_template ?? ''} onChange={(e) => set('popup_template', e.target.value)}>
                 <option value="">Pick a template…</option>
@@ -495,7 +507,48 @@ function PopupScreen() {
                 ))}
               </Select>
             </div>
-            {!creatingDiscount ? (
+
+            {codeIsFixed ? (
+              <div className="mt-3">
+                <Input
+                  label="Fixed discount code"
+                  value={form.popup_fixed_code ?? ''}
+                  onChange={(e) => set('popup_fixed_code', e.target.value)}
+                  hint="Wasify sends this exact code to every subscriber — create the code itself in Shopify → Discounts (Wasify does not create it in fixed mode)."
+                />
+              </div>
+            ) : (
+              <div className="mt-3">
+                <Select
+                  label="Discount"
+                  value={form.popup_discount_id ?? ''}
+                  onChange={(e) => set('popup_discount_id', e.target.value || null)}
+                >
+                  <option value="">No discount — list building only</option>
+                  {discounts.filter((d) => d.enabled).map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.label} —{' '}
+                      {d.discount_type === 'fixed_amount' ? `${d.amount} ${d.currency}` : `${d.percentage}%`}, expires in{' '}
+                      {d.expiry_days}d
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+
+            {exampleCode && (
+              <div
+                className="mt-3 rounded-lg px-3 py-2 text-[12px] leading-relaxed"
+                style={{ background: 'var(--w-card2)' }}
+              >
+                Code that will travel — success screen, body{' '}
+                <code style={{ fontFamily: "'JetBrains Mono', monospace" }}>{'{{1}}'}</code>, copy-code and
+                dynamic-link buttons:{' '}
+                <b style={{ fontFamily: "'JetBrains Mono', monospace" }}>{exampleCode}</b>
+                {codeIsFixed ? ' — same for everyone.' : ' — example; each customer gets their own.'}
+              </div>
+            )}
+            {!codeIsFixed && (!creatingDiscount ? (
               <div className="mt-2">
                 <Button variant="ghost" onClick={() => setCreatingDiscount(true)}>
                   + New discount
@@ -552,11 +605,11 @@ function PopupScreen() {
                   </Button>
                 </div>
               </div>
-            )}
+            ))}
             <div className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--w-muted)' }}>
               Template contract: <code style={{ fontFamily: "'JetBrains Mono', monospace" }}>{'{{1}}'}</code> = the
-              discount code (or none, for a plain welcome). A &ldquo;copy code&rdquo; button gets the customer&rsquo;s own
-              code automatically.
+              discount code (or none, for a plain welcome). Copy-code and dynamic-URL buttons get the same code
+              automatically.
             </div>
           </Card>
         </div>
@@ -657,7 +710,7 @@ function PopupScreen() {
                       className="mt-1 text-[16px]"
                       style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.18em' }}
                     >
-                      WELCOME10
+                      {exampleCode || 'WELCOME10'}
                     </div>
                   </div>
                   <div
